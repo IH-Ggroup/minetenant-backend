@@ -1,45 +1,22 @@
-# Docker Composeを使う場合の任意コマンドです。
-# PHP・Composer・MySQLをローカルに用意する場合はREADMEの手順を使用します。
-DOCKER_COMPOSE := docker compose
+# 任意のショートカットです。make がない環境では右側のコマンドを直接使えます。
+# MySQLはPC上で起動してください。APIは Ctrl+C で終了します。
 
-.PHONY: setup up down test lint format fresh routes
+.PHONY: setup up test lint format routes
 
 setup:
-	@test -f .env || cp .env.example .env
-	$(DOCKER_COMPOSE) build app
-	$(DOCKER_COMPOSE) up -d --wait mysql
-	$(DOCKER_COMPOSE) exec -T mysql mysql -uroot -proot -e "\
-		CREATE DATABASE IF NOT EXISTS minetenant_test \
-			CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
-		GRANT ALL PRIVILEGES ON minetenant_test.* TO 'minetenant'@'%';"
-	$(DOCKER_COMPOSE) run --rm app composer install
-	$(DOCKER_COMPOSE) run --rm app php artisan key:generate --force
-	$(DOCKER_COMPOSE) run --rm app php artisan migrate:fresh --seed --force
+	composer run setup
 
 up:
-	$(DOCKER_COMPOSE) up app
-
-down:
-	$(DOCKER_COMPOSE) down
+	composer run dev
 
 test:
-	$(DOCKER_COMPOSE) run --rm \
-		-e APP_ENV=testing \
-		-e DB_CONNECTION=mysql \
-		-e DB_HOST=mysql \
-		-e DB_DATABASE=minetenant_test \
-		-e DB_USERNAME=minetenant \
-		-e DB_PASSWORD=minetenant \
-		app php artisan test
+	composer test
 
 lint:
-	$(DOCKER_COMPOSE) run --rm app ./vendor/bin/pint --test
+	composer lint
 
 format:
-	$(DOCKER_COMPOSE) run --rm app ./vendor/bin/pint
-
-fresh:
-	$(DOCKER_COMPOSE) run --rm app php artisan migrate:fresh --seed
+	composer format
 
 routes:
-	$(DOCKER_COMPOSE) run --rm app php artisan route:list --path=api
+	php artisan route:list --path=api

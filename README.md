@@ -34,7 +34,7 @@ WebとFabricは別々の在庫を持たず、どちらもLaravelの購入サー�
 - Fabric MODから呼べる`GET /api/hello`
 - フロント開発サーバー向けCORS設定
 - フロントと同じ初期デモデータ
-- Docker ComposeによるLaravel・MySQL開発環境
+- Dockerを使わないPHP・MySQLのローカル開発環境
 
 ## 今回含めないもの
 
@@ -58,84 +58,110 @@ Webの出品者・購入者IDはログイン済みユーザーから決めます
 
 ## セットアップ
 
-基本の開発環境は次の3つです。
+Dockerは使いません。自分のPCに次の3つを用意します。
 
-- PHP 8.3以上
-- Composer 2
-- MySQL 8.4
+- **PHP 8.4.1以上（8.4系の最新パッチ推奨）**：`pdo_mysql`拡張も必要です。
+- **Composer 2**
+- **MySQL 8.4**：SQLiteやMariaDBではなくMySQLを使います。
 
-MacではLaravel Herdを使うと、PHPとComposerをまとめて準備できます。
+Laravel自体はPHP 8.3対応ですが、このリポジトリの`composer.lock`にはPHP 8.4.1以上が
+必要なライブラリが含まれます。`--ignore-platform-reqs`で回避しないでください。
 
-### PHP・MySQLをローカルで使う場合
+まだ入れていない場合は、[Laravelのインストール案内](https://laravel.com/docs/13.x/installation)と
+[MySQL 8.4のインストール案内](https://dev.mysql.com/doc/refman/8.4/en/installing.html)を参照してください。
+PHPとComposerは[Laravel Herd](https://herd.laravel.com/)でも用意できます。
+MySQLは別途インストールします（有料機能は必要ありません）。
 
-MySQLの管理ユーザーで次を実行し、開発専用ユーザーと2つのデータベースを
-作成します。ここで使う`minetenant`パスワードはローカル開発専用です。
+### 初回だけ行うこと
 
-```bash
-mysql -u root -p <<'SQL'
-CREATE DATABASE IF NOT EXISTS minetenant
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE DATABASE IF NOT EXISTS minetenant_test
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+**1. MySQLを起動して、開発用DBを用意する**
 
-CREATE USER IF NOT EXISTS 'minetenant'@'localhost'
-  IDENTIFIED BY 'minetenant';
-CREATE USER IF NOT EXISTS 'minetenant'@'127.0.0.1'
-  IDENTIFIED BY 'minetenant';
-ALTER USER 'minetenant'@'localhost' IDENTIFIED BY 'minetenant';
-ALTER USER 'minetenant'@'127.0.0.1' IDENTIFIED BY 'minetenant';
-
-GRANT ALL PRIVILEGES ON minetenant.* TO 'minetenant'@'localhost';
-GRANT ALL PRIVILEGES ON minetenant_test.* TO 'minetenant'@'localhost';
-GRANT ALL PRIVILEGES ON minetenant.* TO 'minetenant'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON minetenant_test.* TO 'minetenant'@'127.0.0.1';
-SQL
-```
-
-続いてLaravelをセットアップします。
+このリポジトリのフォルダで次を実行します。パスワードはMySQLインストール時に設定したものです。
 
 ```bash
-composer install
-cp .env.example .env
-php artisan key:generate
-php artisan migrate:fresh --seed
-php artisan serve --host=127.0.0.1 --port=8787
+mysql -u root -p
 ```
 
-`migrate:fresh`は対象データベースの既存テーブルを削除します。上記コマンドは
-開発用の`minetenant`データベースだけに対して実行してください。
+MySQLの画面になったら、以下を実行します。Windows・macOSで同じ手順です。
 
-起動後のURL：
+```sql
+SOURCE database/setup-local.sql;
+EXIT;
+```
 
-- API: <http://localhost:8787>
-- 疎通確認: <http://localhost:8787/api/hello>
-- Laravelヘルスチェック: <http://localhost:8787/up>
-- MySQL: `127.0.0.1:3306`
+開発用`minetenant`とテスト用`minetenant_test`が作られます。
+MySQL Workbenchなどを使う場合は、`database/setup-local.sql`を開いて実行しても構いません。
+既存テーブル・既存ユーザーのパスワードは変更しません。
 
-## よく使うコマンド
+**2. Laravelをセットアップする**
+
+```bash
+composer run setup
+```
+
+依存パッケージ、`.env`、暗号化キー、テーブル、初期データを準備します。
+既存の`.env`・暗号化キー・データは保持します。初期データの投入は、業務テーブルが空の場合だけです。
+MySQLのポートやユーザーが異なる場合は、作成された`.env`の以下を直して再実行してください。
+
+```env
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=minetenant
+DB_USERNAME=minetenant
+DB_PASSWORD=minetenant
+```
+
+ここに示すパスワードはローカル開発専用です。`.env`はGitへ含めません。
+更新を取り込んだときも`composer run setup`で依存関係と未適用のマイグレーションを反映できます。
+
+### 毎回の起動
+
+1. PC上のMySQLを起動する（インストールしたMySQLの設定画面・サービスから起動）。
+2. バックエンドのターミナルで以下を実行する。
+
+   ```bash
+   composer run dev
+   ```
+
+3. 別のターミナルで[minetenant-front](https://github.com/IH-Ggroup/minetenant-front)を開き、
+   初回はREADMEのセットアップ後、`npm run dev`で起動する。
+4. ブラウザで **<http://localhost:5173>** を開く。
+
+APIは<http://localhost:8787>、疎通確認は<http://localhost:8787/api/hello>です。
+ブラウザとAPIのホスト名はどちらも`localhost`にそろえます。`127.0.0.1`との混在は避けてください。
+フロントの`.env.local`は`VITE_API_BASE_URL=http://localhost:8787/api/v1`にします。
+フロント・APIはそれぞれのターミナルで`Ctrl+C`を押すと終了します。
+
+### テスト・コード確認
 
 ```bash
 composer test
 composer lint
 composer format
-php artisan migrate:fresh --seed
 php artisan route:list --path=api
 ```
 
-`composer run dev`でも8787番ポートの開発サーバーを起動できます。
+APIテストは起動済みMySQLの`minetenant_test`を使います。LaravelサーバーやDockerの起動は不要です。
+接続情報の既定値は`phpunit.xml`にあります。MySQLのポート・ユーザーを変えた場合は、
+テスト側の設定も合わせてください。テスト用DB名は必ず`_test`で終わる名前にします。
+テストは専用DBを初期化するため、開発用DB名を指定しないでください。
 
-## Dockerを使う場合（任意）
+> `php artisan migrate:fresh --seed`は既存テーブルを削除します。通常の起動・更新では使いません。
+> `php artisan db:seed`だけでもサンプル商品の在庫などを上書きします。通常は`composer run setup`を使ってください。
 
-ローカルへPHPやMySQLを入れたくないメンバー向けに、Docker Composeも任意で
-用意しています。上のネイティブ手順ではDockerを使いません。
+### 困ったとき
 
-```bash
-make setup
-make up
-```
+| 表示・症状 | 確認すること |
+| --- | --- |
+| `php` / `composer`が見つからない | インストール後にターミナルを開き直し、`php -v` / `composer --version`を確認 |
+| `could not find driver` | `php -m`に`pdo_mysql`があるか確認。PHPのMySQL拡張を有効にする |
+| MySQLに接続できない / `Access denied` | MySQLの起動、DB作成、`.env`のポート・ユーザー・パスワードを確認 |
+| 8787番ポートが使用中 | 以前起動したAPIがあれば、そのターミナルで終了する |
+| 401 / 419 | Dockerの問題ではなく認証・CSRFを確認。下記「Webフロントから接続する手順」を参照 |
 
-Docker利用時のみ、MySQLはホストの`127.0.0.1:3307`でも確認できます。
-終了は`make down`です。
+以前のコンテナ内データはPC上のMySQLへ自動では移りません。既存コンテナ・DBボリュームを
+削除せず、必要なデータがある場合はエクスポート・インポートしてから切り替えてください。
 
 ## Fabric MODとの疎通
 
@@ -177,9 +203,9 @@ Minecraft専用Controllerも、購入処理自体はWebと同じ`PurchaseService
 Cookieを共有できません。CORSの許可元は`CORS_ALLOWED_ORIGINS`に設定します。
 既定のサーバーはループバックに限定して起動するため、別のPCからは接続できません。
 
-現在のフロントは`DemoStoreProvider`による仮データの画面です。このバックエンドの
-変更だけではAPI接続へ切り替わりません。名前入力欄、Cookie/CSRF処理、`data`の
-取り出し、購入ごとの`requestId`保持など、フロント側の変更が別途必要です。
+現在のフロントmainは商品などのAPIへ接続していますが、ログインはまだ仮実装です。
+両方のサーバーが起動しても、現在の認証必須APIへそのままは接続できません。
+名前入力欄、Cookie/CSRF処理、ログイン状態復元など、フロント側の認証接続が別途必要です。
 [接続用fetchヘルパーと画面ごとの手順](docs/api.md#webフロントの接続例)を参照してください。
 
 主な入口：
@@ -266,7 +292,7 @@ Controllerへ業務処理を直接増やさず、複数画面やFabricから共�
 
 ## 次に実装する候補
 
-1. フロントの`DemoStoreProvider`をAPIクライアントへ差し替える
+1. フロントの仮ログインを認証APIへ接続する（Cookie・CSRF・ログイン状態復元）
 2. Minecraft APIの認証方式とユーザー連携
 3. 商品更新と画像アップロード
 4. Fabric側の商品カタログ表示と購入コマンド

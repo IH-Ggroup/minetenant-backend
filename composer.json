@@ -6,7 +6,8 @@
     "keywords": ["laravel", "api", "minecraft", "fabric"],
     "license": "MIT",
     "require": {
-        "php": "^8.3",
+        "php": "^8.4.1",
+        "ext-pdo_mysql": "*",
         "laravel/framework": "^13.8",
         "laravel/tinker": "^3.0"
     },
@@ -35,8 +36,8 @@
         "setup": [
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
-            "@php artisan key:generate",
-            "@php artisan migrate:fresh --seed --force"
+            "@php artisan config:clear --ansi",
+            "@php artisan app:setup-local"
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",
