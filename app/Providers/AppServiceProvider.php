@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Support\ApiRequestExamples;
+use Dedoc\Scramble\Scramble;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -22,6 +24,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Scramble::configure()->withOperationTransformers(ApiRequestExamples::class);
+
         RateLimiter::for('web-auth', function (Request $request): array {
             $emailInput = $request->input('email', '');
             $email = is_string($emailInput) ? mb_strtolower(trim($emailInput)) : '';

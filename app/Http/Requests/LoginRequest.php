@@ -30,7 +30,17 @@ final class LoginRequest extends FormRequest
     public function rules(): array
     {
         return [
+            /**
+             * 登録済みメールアドレス。例は初期データの購入者です。
+             *
+             * @example demo@minetenant.jp
+             */
             'email' => ['required', 'string', 'email', 'max:255'],
+            /**
+             * 登録時のパスワード。初期データではpasswordです。
+             *
+             * @example password
+             */
             'password' => [
                 'required',
                 'string',

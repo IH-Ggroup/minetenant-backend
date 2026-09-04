@@ -19,9 +19,28 @@ final class MinecraftPurchaseRequest extends FormRequest
     public function rules(): array
     {
         return [
+            /**
+             * 購入する商品のID。
+             *
+             * @example product-stool
+             */
             'productId' => ['required', 'string', 'exists:products,id'],
+            /**
+             * Minecraft上で購入するユーザーのID。
+             *
+             * @example user-buyer
+             */
             'buyerId' => ['required', 'string', 'exists:users,id'],
+            /**
+             * 1回の購入を識別する文字列。再送時は同じ値、新しい購入には新しい値を使います。
+             * Web購入に使ったrequestIdは使えません。
+             *
+             * @example docs-minecraft-stool-001
+             */
             'requestId' => ['required', 'string', 'max:100'],
+            /**
+             * 送信しないでください。購入元はサーバーでminecraftに固定します。
+             */
             'source' => ['prohibited'],
         ];
     }

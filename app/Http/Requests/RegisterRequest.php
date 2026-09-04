@@ -31,8 +31,23 @@ final class RegisterRequest extends FormRequest
     public function rules(): array
     {
         return [
+            /**
+             * 画面に表示する名前。
+             *
+             * @example 練習ユーザー
+             */
             'name' => ['required', 'string', 'max:120'],
+            /**
+             * まだ登録されていないメールアドレス。同じ例を再送すると422になります。
+             *
+             * @example practice@example.com
+             */
             'email' => ['required', 'string', 'email', 'max:255', Rule::unique('users', 'email')],
+            /**
+             * 8文字以上・72バイト以内のパスワード。
+             *
+             * @example practice-password
+             */
             'password' => [
                 'required',
                 'string',
@@ -45,6 +60,11 @@ final class RegisterRequest extends FormRequest
                     }
                 },
             ],
+            /**
+             * 確認用パスワード。省略できます。指定するときはpasswordと同じ値を入れます。
+             *
+             * @example practice-password
+             */
             'password_confirmation' => ['sometimes', 'required', 'string', 'same:password'],
         ];
     }

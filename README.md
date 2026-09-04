@@ -1,5 +1,10 @@
 # MineTenant Backend
 
+**APIの一覧・入力項目・実行結果をブラウザで確認できます。**
+起動後に [API一覧・動作確認](http://localhost:8787/docs/api) を開いてください。
+追加のデスクトップアプリやサービス登録は不要です。
+最初の使い方は [ブラウザでAPIを試す手順](docs/api-browser.md) にまとめています。
+
 MineTenantのWebフロントとMinecraft Fabric MODから共通利用する、
 Laravel製REST APIの開発土台です。
 
@@ -60,7 +65,7 @@ Webの出品者・購入者IDはログイン済みユーザーから決めます
 
 基本の開発環境は次の3つです。
 
-- PHP 8.3以上
+- PHP 8.4.1以上（現在のcomposer.lockの依存ライブラリに必要）
 - Composer 2
 - MySQL 8.4
 
@@ -158,6 +163,28 @@ Minecraft専用Controllerも、購入処理自体はWebと同じ`PurchaseService
 ## API
 
 詳細とリクエスト例は[docs/api.md](docs/api.md)を参照してください。
+
+### ブラウザで一覧を見て実行する
+
+ScrambleがLaravelのルート・入力ルールからOpenAPIを生成し、Scalarで表示します。
+コードを更新した後は`composer install`を実行してAPIを再起動してください。
+
+- 閲覧・実行画面: <http://localhost:8787/docs/api>
+- OpenAPI JSON: <http://localhost:8787/docs/api.json>
+- 初学者向け手順: [ブラウザでAPIを試す](docs/api-browser.md)
+
+Web認証はCookieセッションです。この画面はCookie・CSRFヘッダーを自動送信するため、
+「CSRF Cookieを準備する」→「ログインする」の順に実行すれば購入なども試せます。
+外部のAPIプロキシは使わず、同じPCのAPIへ直接送信します。
+
+ドキュメントの2つのURLは`APP_ENV=local`で利用できます。本番環境では403です。
+表示には固定バージョンのScalarをCDNから読み込むため、初回はインターネット接続が必要です。
+APIの実行先と試す内容は、そのPCの開発用DBです。
+
+メンテナンス時には`php artisan scramble:export --path=storage/app/api.json`で仕様を確認できます。
+API注釈はControllerとFormRequestに置き、ルート一覧との一致・認証・主要な型をテストします。
+配列を包む`StoreDashboardResource`についてはScrambleの`JR001`警告が1件残りますが、
+集計値の型は明示しており、生成されたスキーマをテストで確認しています。
 
 ### Webフロントから接続する手順
 

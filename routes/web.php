@@ -8,5 +8,6 @@ Route::get('/', function () {
         'status' => 'ok',
         'hello' => url('/api/hello'),
         'health' => url('/up'),
+        'docs' => app()->environment('local') ? url('/docs/api') : null,
     ]);
 });
