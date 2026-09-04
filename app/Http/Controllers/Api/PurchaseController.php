@@ -22,11 +22,21 @@ final class PurchaseController extends Controller
         PurchaseProductRequest $request,
         Product $product,
     ): JsonResponse {
+        return $this->purchase($request, $product->id);
+    }
+
+    public function storeFromBody(PurchaseProductRequest $request): JsonResponse
+    {
+        return $this->purchase($request, $request->validated('productId'));
+    }
+
+    private function purchase(PurchaseProductRequest $request, string $productId): JsonResponse
+    {
         $validated = $request->validated();
 
         $transaction = $this->purchaseService->purchase(
-            productId: $product->id,
-            buyerId: $validated['buyerId'],
+            productId: $productId,
+            buyerId: $request->user()->getAuthIdentifier(),
             source: PurchaseSource::Web,
             requestId: $validated['requestId'],
         );

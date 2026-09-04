@@ -16,6 +16,14 @@ final class CreateProductRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $this->mergeIfMissing([
+            'sellerId' => $this->user()?->getAuthIdentifier(),
+            'storeId' => $this->user()?->store?->id,
+        ]);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -23,7 +31,7 @@ final class CreateProductRequest extends FormRequest
     {
         return [
             'storeId' => ['required', 'string', 'exists:stores,id'],
-            'sellerId' => ['required', 'string', 'exists:users,id'],
+            'sellerId' => ['required', 'string', Rule::in([$this->user()?->getAuthIdentifier()])],
             'name' => ['required', 'string', 'max:120'],
             'description' => ['required', 'string', 'max:2000'],
             'price' => ['required', 'integer', 'min:1', 'max:99999999'],

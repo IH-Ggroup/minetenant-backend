@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Store;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -17,6 +18,7 @@ final class PurchaseApiTest extends TestCase
         parent::setUp();
 
         $this->seed();
+        $this->actingAs(User::query()->findOrFail('user-buyer'));
     }
 
     public function test_web_purchase_updates_shared_inventory_and_store_growth(): void
@@ -102,6 +104,7 @@ final class PurchaseApiTest extends TestCase
 
     public function test_seller_cannot_purchase_their_own_product(): void
     {
+        $this->actingAs(User::query()->findOrFail('user-seller'));
         $this->postJson('/api/v1/products/product-stool/purchases', [
             'buyerId' => 'user-seller',
             'source' => 'web',
@@ -133,6 +136,7 @@ final class PurchaseApiTest extends TestCase
 
     public function test_stock_never_becomes_negative(): void
     {
+        $this->actingAs(User::query()->findOrFail('user-seller'));
         $firstPayload = [
             'buyerId' => 'user-seller',
             'source' => 'web',
