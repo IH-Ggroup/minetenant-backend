@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -16,6 +17,7 @@ final class ProductApiTest extends TestCase
         parent::setUp();
 
         $this->seed();
+        $this->actingAs(User::query()->findOrFail('user-seller'));
     }
 
     public function test_products_returns_all_products_in_newest_first_order(): void

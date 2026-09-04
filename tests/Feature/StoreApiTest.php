@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -32,6 +33,7 @@ final class StoreApiTest extends TestCase
 
     public function test_store_dashboard_returns_inventory_and_sales_summary(): void
     {
+        $this->actingAs(User::query()->findOrFail('user-seller'));
         $this->getJson('/api/v1/stores/store-mine/dashboard')
             ->assertOk()
             ->assertJsonPath('data.store.id', 'store-mine')

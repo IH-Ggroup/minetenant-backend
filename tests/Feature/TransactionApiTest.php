@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -16,6 +17,7 @@ final class TransactionApiTest extends TestCase
         parent::setUp();
 
         $this->seed();
+        $this->actingAs(User::query()->findOrFail('user-buyer'));
     }
 
     public function test_buyer_can_get_related_transactions(): void
@@ -30,6 +32,7 @@ final class TransactionApiTest extends TestCase
 
     public function test_seller_can_get_related_transactions(): void
     {
+        $this->actingAs(User::query()->findOrFail('user-seller'));
         $this->getJson('/api/v1/transactions?userId=user-seller')
             ->assertOk()
             ->assertJsonCount(1, 'data')

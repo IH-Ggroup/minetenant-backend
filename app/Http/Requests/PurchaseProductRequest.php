@@ -14,13 +14,29 @@ final class PurchaseProductRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $this->mergeIfMissing([
+            'buyerId' => $this->user()?->getAuthIdentifier(),
+            'source' => 'web',
+        ]);
+    }
+
     /**
      * @return array<string, mixed>
      */
     public function rules(): array
     {
+        $product = $this->route('product');
+
         return [
-            'buyerId' => ['required', 'string', 'exists:users,id'],
+            'productId' => [
+                Rule::requiredIf($product === null),
+                'string',
+                'exists:products,id',
+                ...($product === null ? [] : [Rule::in([$product->id])]),
+            ],
+            'buyerId' => ['required', 'string', Rule::in([$this->user()?->getAuthIdentifier()])],
             'source' => ['required', Rule::in(['web'])],
             'requestId' => ['required', 'string', 'max:100'],
         ];

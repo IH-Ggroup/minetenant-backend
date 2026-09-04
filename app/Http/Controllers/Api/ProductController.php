@@ -12,6 +12,8 @@ use App\Services\ProductService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response;
 
 final class ProductController extends Controller
 {
@@ -23,7 +25,10 @@ final class ProductController extends Controller
     {
         $validated = $request->validate([
             'storeId' => ['sometimes', 'string', 'exists:stores,id'],
+            'keyword' => ['sometimes', 'nullable', 'string', 'max:120'],
         ]);
+
+        $keyword = trim($validated['keyword'] ?? '');
 
         $products = Product::query()
             ->when(
@@ -33,6 +38,18 @@ final class ProductController extends Controller
                     $storeId,
                 ),
             )
+            ->when($keyword !== '', function ($query) use ($keyword): void {
+                $pattern = '%'.str_replace(
+                    ['!', '%', '_'],
+                    ['!!', '!%', '!_'],
+                    $keyword,
+                ).'%';
+
+                $query->where(function ($query) use ($pattern): void {
+                    $query->whereRaw("name LIKE ? ESCAPE '!'", [$pattern])
+                        ->orWhereRaw("description LIKE ? ESCAPE '!'", [$pattern]);
+                });
+            })
             ->latest('created_at')
             ->get();
 
@@ -42,6 +59,32 @@ final class ProductController extends Controller
     public function show(Product $product): ProductResource
     {
         return new ProductResource($product);
+    }
+
+    public function destroy(Request $request, Product $product): Response
+    {
+        return DB::transaction(function () use ($request, $product): Response {
+            $product = Product::query()
+                ->whereKey($product->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            abort_unless(
+                $product->seller_id === $request->user()->getAuthIdentifier(),
+                403,
+                'Only the seller can delete this product.',
+            );
+
+            abort_if(
+                $product->transactions()->exists(),
+                409,
+                'Products with transaction history cannot be deleted.',
+            );
+
+            $product->delete();
+
+            return response()->noContent();
+        }, attempts: 3);
     }
 
     public function store(CreateProductRequest $request): JsonResponse

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -16,6 +17,7 @@ final class UserApiTest extends TestCase
         parent::setUp();
 
         $this->seed();
+        $this->actingAs(User::query()->findOrFail('user-buyer'));
     }
 
     public function test_users_returns_the_demo_users_for_temporary_login(): void

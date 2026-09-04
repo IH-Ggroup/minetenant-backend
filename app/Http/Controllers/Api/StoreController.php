@@ -9,6 +9,7 @@ use App\Http\Resources\StoreDashboardResource;
 use App\Http\Resources\StoreResource;
 use App\Models\Store;
 use App\Services\StoreDashboardService;
+use Illuminate\Http\Request;
 
 final class StoreController extends Controller
 {
@@ -21,8 +22,10 @@ final class StoreController extends Controller
         return new StoreResource($store);
     }
 
-    public function dashboard(Store $store): StoreDashboardResource
+    public function dashboard(Request $request, Store $store): StoreDashboardResource
     {
+        abort_unless($store->owner_id === $request->user()->getAuthIdentifier(), 403);
+
         return new StoreDashboardResource(
             $this->dashboardService->getDashboard($store),
         );

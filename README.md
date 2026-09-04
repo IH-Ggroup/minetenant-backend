@@ -4,8 +4,8 @@ MineTenantのWebフロントとMinecraft Fabric MODから共通利用する、
 Laravel製REST APIの開発土台です。
 
 完成したバックエンドではなく、メンバーが機能を分担して肉付けするための
-小さく動く基盤です。認証や決済を先に作り込まず、MineTenantの中心である
-「共通在庫」と「店舗育成」の境界を先に揃えています。
+小さく動く基盤です。Web向けのセッション認証と、MineTenantの中心である
+「共通在庫」「店舗育成」を実装しています。決済はデモ処理です。
 
 ## 採用技術
 
@@ -21,10 +21,12 @@ WebとFabricは別々の在庫を持たず、どちらもLaravelの購入サー�
 
 ## この基盤に含むもの
 
-- 商品一覧・詳細・出品API
+- Webの新規登録・ログイン・ログアウト・ログイン状態取得API
+- Cookieセッション認証、CSRF検証、所有者・取引関係者の確認
+- 商品一覧・検索・詳細・出品・未取引商品の削除API
 - 店舗情報・店舗ダッシュボードAPI
-- ユーザー切り替え用の仮ユーザーAPI
-- 取引履歴API
+- ログイン必須の開発用ユーザー一覧API
+- 本人の取引履歴・取引詳細API
 - Web購入とFabric購入で共有する購入処理
 - MySQLトランザクションと行ロックによる在庫保護
 - リクエストIDによる購入の重複防止
@@ -36,7 +38,7 @@ WebとFabricは別々の在庫を持たず、どちらもLaravelの購入サー�
 
 ## 今回含めないもの
 
-- 本物のログイン認証・権限管理
+- メール認証・パスワード再設定・管理者向け権限管理
 - 決済、配送、住所管理
 - メッセージ・チャット機能
 - 画像ファイルのアップロード
@@ -44,11 +46,14 @@ WebとFabricは別々の在庫を持たず、どちらもLaravelの購入サー�
 - Fabric MODそのもののコード
 - 本番環境向けインフラ
 
-認証導入までは、APIリクエストへ`buyerId`や`sellerId`を明示して動作を確認します。
+Webの出品者・購入者IDはログイン済みユーザーから決めます。新規登録時には
+本人の店舗も作成します。Minecraft側の従来APIはデモ用ユーザーIDを受け取る
+仕様を維持しています。
 
 > [!WARNING]
-> このリポジトリはローカル開発用の基盤です。現時点では認証がなく、IDを指定すれば
-> 出品・購入操作を呼び出せます。インターネットへ公開しないでください。
+> このリポジトリはローカル開発用の基盤です。Webの操作は認証で保護されていますが、
+> Minecraftの購入APIは未認証のままで、IDを指定すれば購入処理を呼び出せます。
+> インターネットへ公開しないでください。
 > CORSはブラウザの通信元を制限する仕組みであり、認証の代わりにはなりません。
 
 ## セットアップ
@@ -154,19 +159,50 @@ Minecraft専用Controllerも、購入処理自体はWebと同じ`PurchaseService
 
 詳細とリクエスト例は[docs/api.md](docs/api.md)を参照してください。
 
+### Webフロントから接続する手順
+
+1. フロントの`.env.local`に`VITE_API_BASE_URL=http://localhost:8787/api/v1`を設定する。
+2. 最初に`GET /api/v1/auth/csrf-cookie`を`credentials: 'include'`で呼ぶ。
+3. Cookieの`XSRF-TOKEN`をURLデコードし、POST・DELETEの`X-XSRF-TOKEN`ヘッダーへ設定する。
+4. `POST /auth/login`または`POST /auth/register`でログインし、以後も全リクエストに
+   `credentials: 'include'`を指定する。トークンは書き込みのたびにCookieから読み直す。
+5. 起動・再読み込み時に`GET /auth/me`を呼び、ログイン状態を復元する。
+
+ベースURL以降の`/auth/login`などはすべて`/api/v1`配下です。通常のレスポンスは
+`{ "data": ... }`なので、フロントでは`data`を取り出します。ログアウトと削除は
+`204 No Content`のため、JSONとして読まないでください。
+
+同じPCでのHTTP開発では、フロントを`http://localhost:5173`、APIを
+`http://localhost:8787`にそろえてください。`localhost`と`127.0.0.1`を混在させると
+Cookieを共有できません。CORSの許可元は`CORS_ALLOWED_ORIGINS`に設定します。
+既定のサーバーはループバックに限定して起動するため、別のPCからは接続できません。
+
+現在のフロントは`DemoStoreProvider`による仮データの画面です。このバックエンドの
+変更だけではAPI接続へ切り替わりません。名前入力欄、Cookie/CSRF処理、`data`の
+取り出し、購入ごとの`requestId`保持など、フロント側の変更が別途必要です。
+[接続用fetchヘルパーと画面ごとの手順](docs/api.md#webフロントの接続例)を参照してください。
+
 主な入口：
 
 | Method | URL | 役割 |
 | --- | --- | --- |
 | GET | `/api/hello` | Fabric疎通確認 |
-| GET | `/api/v1/users` | 仮ユーザー一覧 |
-| GET | `/api/v1/products` | 商品一覧 |
+| GET | `/api/v1/auth/csrf-cookie` | CSRF Cookie初期化 |
+| POST | `/api/v1/auth/register` | 新規登録・店舗作成・ログイン |
+| POST | `/api/v1/auth/login` | ログイン |
+| GET | `/api/v1/auth/me` | ログイン済みユーザー |
+| POST | `/api/v1/auth/logout` | ログアウト |
+| GET | `/api/v1/users` | ログイン必須の開発用ユーザー一覧 |
+| GET | `/api/v1/products?keyword={検索語}` | 商品一覧・検索 |
 | GET | `/api/v1/products/{id}` | 商品詳細 |
 | POST | `/api/v1/products` | 商品出品 |
+| DELETE | `/api/v1/products/{id}` | 本人の未取引商品を削除 |
+| POST | `/api/v1/purchases` | Web購入（商品IDを本文に指定） |
 | POST | `/api/v1/products/{id}/purchases` | Web購入 |
 | GET | `/api/v1/stores/{id}` | 店舗情報 |
-| GET | `/api/v1/stores/{id}/dashboard` | 店舗集計 |
-| GET | `/api/v1/transactions?userId={id}` | 取引履歴 |
+| GET | `/api/v1/stores/{id}/dashboard` | 所有者向け店舗集計 |
+| GET | `/api/v1/transactions` | 本人の取引履歴 |
+| GET | `/api/v1/transactions/{id}` | 関係する取引の詳細 |
 | GET | `/api/v1/minecraft/catalog` | Fabric向け商品一覧 |
 | POST | `/api/v1/minecraft/purchases` | Fabric購入 |
 
@@ -180,6 +216,16 @@ Minecraft専用Controllerも、購入処理自体はWebと同じ`PurchaseService
 - YAMADA CRAFT: `store-yamada`
 - 商品6件（うち1件は売り切れ）
 - Minecraft購入履歴1件
+
+ローカルデモ用のログイン情報：
+
+| ユーザー | メールアドレス | パスワード |
+| --- | --- | --- |
+| 購入者 | `demo@minetenant.jp` | `password` |
+| 出品者 | `seller@minetenant.jp` | `password` |
+
+購入者も自分の店舗へ出品できます。商品`product-stool`を購入するデモでは、
+出品者本人ではなく購入者アカウントでログインしてください。
 
 ## ディレクトリ
 
@@ -221,8 +267,8 @@ Controllerへ業務処理を直接増やさず、複数画面やFabricから共�
 ## 次に実装する候補
 
 1. フロントの`DemoStoreProvider`をAPIクライアントへ差し替える
-2. Laravel Sanctumによる認証と本人IDのサーバー決定
-3. 商品更新・削除と画像アップロード
+2. Minecraft APIの認証方式とユーザー連携
+3. 商品更新と画像アップロード
 4. Fabric側の商品カタログ表示と購入コマンド
 5. MySQLを使うCIテスト
 6. 本番環境とシークレット管理
