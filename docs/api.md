@@ -514,25 +514,22 @@ const product = await api<Product>(
 await api<void>('/auth/logout', { method: 'POST' });
 ```
 
-### 現在のフロントからの切り替え手順
+### フロント側の接続実装
 
-1. `src/api/products.ts`の各関数を上のヘルパーへ接続する。APIレスポンス全体を
-   `Product[]`などへキャストせず、`data`を取り出す。
-2. 新規登録画面へ名前入力を追加し、`register(name, email, password)`として送る。
-   現在の関数は`name`引数がないまま送信しようとしているため修正する。
-3. `DemoStoreProvider`の仮ログインを、ログインAPI・`GET /auth/me`へ差し替える。
-   セッションCookieはブラウザが管理する。ユーザー情報だけを画面の状態に持つ。
-4. 商品一覧・詳細・店舗ページで各GETを使い、出品時はフォームの内容をPOSTする。
-   `sellerId`と`storeId`は送らなくてよい。
-5. 購入は`POST /purchases`へ`productId`と保持した`requestId`を送る。
-   `transaction.id`で完了画面へ進み、商品を再GETして在庫を更新する。
-6. マイページは`GET /transactions`、購入完了ページの再読み込みは
-   `GET /transactions/{transactionId}`、店舗管理は本人の店舗ダッシュボードを使う。
-7. 422の`errors`をフォームに表示し、403・409・419・通信失敗を成功表示にしない。
-   汎用ヘルパーでPOST・DELETEを自動的に繰り返さない。
+フロントも最新mainへ更新してください。古い仮ログイン版では認証必須のAPIを利用できません。
 
-現在のフロント画面は仮データのContextを利用しています。このリポジトリの変更だけで
-自動的にAPI接続へ切り替わるわけではなく、上記のフロント実装が別途必要です。
+1. `src/api/client.ts`がCookie・CSRF・`data`の取り出し・204・HTTPエラーを共通処理します。
+2. `src/api/auth.ts`が登録・ログイン・ログアウト・`GET /auth/me`に接続します。
+   登録画面は名前・メールアドレス・パスワード・確認用パスワードを送信します。
+3. `DemoStoreProvider`はログイン状態をAPIから復元します。セッションCookieはブラウザが管理し、
+   パスワードやトークンはlocalStorageへ保存しません。
+4. 出品では商品情報のみを送信し、`sellerId`・`storeId`はLaravel側で決定します。
+5. 購入は`POST /products/{productId}/purchases`へ保持した`requestId`を送信します。
+   `transaction.id`で完了画面へ進み、商品を再GETして在庫を表示します。
+6. マイページ・購入完了画面では`GET /transactions`から本人の取引を取得し、
+   店舗管理では本人の店舗ダッシュボードを使います。クライアントから本人IDを指定しません。
+7. 登録・ログインの422は入力欄に表示します。401時は認証状態をクリアし、
+   419や通信失敗では操作を自動再送せず、ユーザーへ再操作を案内します。
 
 ## Fabric商品一覧
 
