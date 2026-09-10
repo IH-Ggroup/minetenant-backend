@@ -1,7 +1,8 @@
 # MineTenant API v1
 
-開発URLは`http://localhost:8787`です。JSONのキーはフロントのTypeScript型に
-合わせてcamelCaseで返します。
+開発URLは`http://localhost:8787`です。バックエンドはNode.js上のTypeScript / Honoで
+動作し、既存のMySQLデータとAPI形式を引き継ぎます。JSONのキーはフロントの
+TypeScript型に合わせてcamelCaseで返します。
 
 ## 共通仕様
 
@@ -18,7 +19,7 @@
 - 在庫切れ・重複など: `409 Conflict`
 - CSRFトークン不一致・期限切れ: `419`。Cookieを再取得し、必要なら再ログインする
 - ログイン・登録の試行制限: `429 Too Many Requests`
-- Web認証: Laravel組み込みのCookieセッション（`web`ガード）
+- Web認証: MySQLに保存するCookieセッション
 - WebのすべてのPOST・DELETEは、ログイン・登録も含めてCSRF検証の対象
 - Minecraft専用APIは既存の未認証デモ仕様を維持。公開運用には対応していない
 - メッセージ・チャットAPIは作らない
@@ -28,24 +29,24 @@
 ベースURLは`http://localhost:8787/api/v1`です。下表のパスを後ろにつなぎます。
 ログイン必須のAPIにはセッションCookieが必要です。公開GETはログイン不要です。
 
-| Method | パス | ログイン | 用途・正常時 |
-| --- | --- | --- | --- |
-| GET | `/auth/csrf-cookie` | 不要 | CSRF Cookie設定、204 |
-| POST | `/auth/register` | 不要 | ユーザー・所有店舗作成とログイン、201 `data: User` |
-| POST | `/auth/login` | 不要 | ログイン、200 `data: User` |
-| GET | `/auth/me` | 必須 | 現在のユーザー、200 `data: User` |
-| POST | `/auth/logout` | 必須 | セッション破棄、204 |
-| GET | `/users` | 必須 | 開発用ユーザー一覧、200 `data: User[]` |
-| GET | `/products` | 不要 | 商品一覧・検索・店舗絞り込み、200 `data: Product[]` |
-| GET | `/products/{productId}` | 不要 | 商品詳細、200 `data: Product` |
-| POST | `/products` | 必須 | 本人の店舗へ出品、201 `data: Product` |
-| DELETE | `/products/{productId}` | 必須 | 本人の未取引商品の削除、204 |
-| POST | `/purchases` | 必須 | 本文に商品IDを指定して購入、201または200 `data: Transaction` |
-| POST | `/products/{productId}/purchases` | 必須 | URLに商品IDを指定して購入、201または200 `data: Transaction` |
-| GET | `/stores/{storeId}` | 不要 | 公開店舗情報、200 `data: Store` |
-| GET | `/stores/{storeId}/dashboard` | 所有者のみ | 店舗集計、200 `data: Dashboard` |
-| GET | `/transactions` | 必須 | 本人の購入・販売履歴、200 `data: Transaction[]` |
-| GET | `/transactions/{transactionId}` | 取引関係者のみ | 取引詳細、200 `data: Transaction` |
+| Method | パス                              | ログイン       | 用途・正常時                                                 |
+| ------ | --------------------------------- | -------------- | ------------------------------------------------------------ |
+| GET    | `/auth/csrf-cookie`               | 不要           | CSRF Cookie設定、204                                         |
+| POST   | `/auth/register`                  | 不要           | ユーザー・所有店舗作成とログイン、201 `data: User`           |
+| POST   | `/auth/login`                     | 不要           | ログイン、200 `data: User`                                   |
+| GET    | `/auth/me`                        | 必須           | 現在のユーザー、200 `data: User`                             |
+| POST   | `/auth/logout`                    | 必須           | セッション破棄、204                                          |
+| GET    | `/users`                          | 必須           | 開発用ユーザー一覧、200 `data: User[]`                       |
+| GET    | `/products`                       | 不要           | 商品一覧・検索・店舗絞り込み、200 `data: Product[]`          |
+| GET    | `/products/{productId}`           | 不要           | 商品詳細、200 `data: Product`                                |
+| POST   | `/products`                       | 必須           | 本人の店舗へ出品、201 `data: Product`                        |
+| DELETE | `/products/{productId}`           | 必須           | 本人の未取引商品の削除、204                                  |
+| POST   | `/purchases`                      | 必須           | 本文に商品IDを指定して購入、201または200 `data: Transaction` |
+| POST   | `/products/{productId}/purchases` | 必須           | URLに商品IDを指定して購入、201または200 `data: Transaction`  |
+| GET    | `/stores/{storeId}`               | 不要           | 公開店舗情報、200 `data: Store`                              |
+| GET    | `/stores/{storeId}/dashboard`     | 所有者のみ     | 店舗集計、200 `data: Dashboard`                              |
+| GET    | `/transactions`                   | 必須           | 本人の購入・販売履歴、200 `data: Transaction[]`              |
+| GET    | `/transactions/{transactionId}`   | 取引関係者のみ | 取引詳細、200 `data: Transaction`                            |
 
 `GET /api/hello`はv1の外にある疎通確認用APIです。商品編集・店舗編集・決済・
 住所保存のAPIはこのPoCには含みません。
@@ -60,6 +61,11 @@ POST・DELETE時には`XSRF-TOKEN`をURLデコードした値を`X-XSRF-TOKEN`�
 ログイン・登録でセッションが更新され、ログアウトでは破棄されます。
 CSRFトークンを固定の変数へ保存せず、書き込みのたびにCookieを読み直してください。
 認証情報をBearerトークンとして送る方式ではありません。
+
+Honoへの切り替え時は、CSRF Cookieを取得して一度ログインし直してください。
+既存ユーザーとLaravelのbcryptパスワードは引き継ぎますが、Laravelの暗号化セッションは
+引き継ぎません。セッションCookieの既定名は`minetenant_hono_session`で、
+`XSRF-TOKEN` Cookie名とヘッダーの送り方は従来と同じです。
 
 ### 新規登録
 
@@ -430,7 +436,9 @@ function csrfToken(): string | undefined {
   const cookie = document.cookie
     .split('; ')
     .find((item) => item.startsWith('XSRF-TOKEN='));
-  return cookie ? decodeURIComponent(cookie.slice('XSRF-TOKEN='.length)) : undefined;
+  return cookie
+    ? decodeURIComponent(cookie.slice('XSRF-TOKEN='.length))
+    : undefined;
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -470,10 +478,14 @@ export async function api<T>(
   if (writes) {
     if (!csrfToken()) await refreshCsrf();
     const token = csrfToken();
-    if (!token) throw new Error('CSRF Cookieを取得できません。接続先を確認してください。');
+    if (!token)
+      throw new Error(
+        'CSRF Cookieを取得できません。接続先を確認してください。',
+      );
     headers.set('X-XSRF-TOKEN', token);
   }
-  if (options.body !== undefined) headers.set('Content-Type', 'application/json');
+  if (options.body !== undefined)
+    headers.set('Content-Type', 'application/json');
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
@@ -523,7 +535,7 @@ await api<void>('/auth/logout', { method: 'POST' });
    登録画面は名前・メールアドレス・パスワード・確認用パスワードを送信します。
 3. `DemoStoreProvider`はログイン状態をAPIから復元します。セッションCookieはブラウザが管理し、
    パスワードやトークンはlocalStorageへ保存しません。
-4. 出品では商品情報のみを送信し、`sellerId`・`storeId`はLaravel側で決定します。
+4. 出品では商品情報のみを送信し、`sellerId`・`storeId`はAPI側で決定します。
 5. 購入は`POST /products/{productId}/purchases`へ保持した`requestId`を送信します。
    `transaction.id`で完了画面へ進み、商品を再GETして在庫を表示します。
 6. マイページ・購入完了画面では`GET /transactions`から本人の取引を取得し、
@@ -558,5 +570,5 @@ Content-Type: application/json
 }
 ```
 
-購入元はLaravel側で`minecraft`に固定します。Web購入と同じ`PurchaseService`を
-通るため、同じ商品在庫・取引履歴・店舗ポイントが更新されます。
+購入元はAPI側で`minecraft`に固定します。Web購入と同じ購入処理を通るため、
+同じ商品在庫・取引履歴・店舗ポイントが更新されます。

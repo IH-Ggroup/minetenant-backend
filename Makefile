@@ -4,19 +4,19 @@
 .PHONY: setup up test lint format routes
 
 setup:
-	composer run setup
+	npm run setup
 
 up:
-	composer run dev
+	npm run dev
 
 test:
-	composer test
+	npm test
 
 lint:
-	composer lint
+	npm run lint
 
 format:
-	composer format
+	npm run format
 
 routes:
-	php artisan route:list --path=api
+	@echo "API routes: docs/api.md"
