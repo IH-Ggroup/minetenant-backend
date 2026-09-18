@@ -1,24 +1,27 @@
-# MineTenant 一点物商品・購入 DB 契約
+# MineTenant 一点物商品・購入・店舗成長 DB 契約
 
-この文書は [B-CONTRACT-01](https://github.com/IH-Ggroup/minetenant-backend/issues/41) で確定した、
-`products`と`purchase_transactions`だけの目標契約です。現行`develop`の実装説明ではなく、
-B-PRODUCT / B-BUY Issueが実装するときの正本です。migration、route、service本体はこのIssueでは
+この文書は [B-CONTRACT-01](https://github.com/IH-Ggroup/minetenant-backend/issues/41) と
+[B-CONTRACT-02](https://github.com/IH-Ggroup/minetenant-backend/issues/42) で確定した、`products`、
+`purchase_transactions`、`stores`の目標契約です。現行`develop`の実装説明ではなく、B-PRODUCT、
+B-BUY、B-XP Issueが実装するときの正本です。migration、route、service本体は契約Issueでは
 変更しません。
 
 APIのcamelCase、HTTP status、error codeは[`docs/api.md`](./api.md)を正本とし、この文書では
-MySQLのsnake_case、制約、移行規則を固定します。ここにない経験値、Minecraft認証・連携、建築
-ジョブの列やtableは、それぞれの契約Issueで決めます。
+MySQLのsnake_case、制約、移行規則を固定します。ここにないMinecraft認証・連携、建築ジョブの
+列やtableは、それぞれの契約Issueで決めます。
 
 ## 現行から目標への変更
 
-| 対象               | 現行`develop`                 | 目標契約                                                      |
-| ------------------ | ----------------------------- | ------------------------------------------------------------- |
-| 商品の販売状態     | `products.stock INT UNSIGNED` | `products.status = available / sold`                          |
-| 出品の冪等性       | なし                          | 出品者と`listing_request_id`を一意化し、内容fingerprintを保存 |
-| 商品削除           | 未取引行を物理削除            | `deleted_at`によるsoft delete                                 |
-| 一商品あたりの取引 | `product_id`は通常index       | `product_id`をUNIQUEにして最大1取引                           |
-| 購入の冪等性       | `request_id`を一意化済み      | NO PAD比較の一意制約を維持。新規IDはAPIでASCII・100文字に制限 |
-| 購入時の販売状態   | `stock < 1`判定後に1減算      | `available`をlockし、`sold`へ一度だけ遷移                     |
+| 対象               | 現行`develop`                 | 目標契約                                                       |
+| ------------------ | ----------------------------- | -------------------------------------------------------------- |
+| 商品の販売状態     | `products.stock INT UNSIGNED` | `products.status = available / sold`                           |
+| 出品の冪等性       | なし                          | 出品者と`listing_request_id`を一意化し、内容fingerprintを保存  |
+| 商品削除           | 未取引行を物理削除            | `deleted_at`によるsoft delete                                  |
+| 一商品あたりの取引 | `product_id`は通常index       | `product_id`をUNIQUEにして最大1取引                            |
+| 購入の冪等性       | `request_id`を一意化済み      | NO PAD比較の一意制約を維持。新規IDはAPIでASCII・100文字に制限  |
+| 購入時の販売状態   | `stock < 1`判定後に1減算      | `available`をlockし、`sold`へ一度だけ遷移                      |
+| 店舗points         | 販売店舗へ100 pointsだけ加算  | 出品店舗へ10、buyer店舗へ50、販売店舗へ100を初回成功時だけ加算 |
+| 店舗level          | 境界と表示計算が実装に直書き  | Lv1〜5の境界、最大時、表示計算、丸めを共通契約として固定       |
 
 `users`、`stores`とその主キーは既存の`id`を維持します。`stores.owner_id`も改名しません。
 
@@ -32,6 +35,10 @@ MySQLのsnake_case、制約、移行規則を固定します。ここにない�
 | `purchase_transactions.product_id`を一意化         | applicationのlockに加え、DBでも一商品一取引を保証するため                   |
 | 商品をsoft delete                                  | 物理削除後の再送で同じ出品requestから別Productが生まれるのを防ぐため        |
 | `OUT_OF_STOCK`を維持                               | 既存クライアントの409分岐を壊さず、「すでにsold」の意味へ読み替えられるため |
+| 出品pointsをJSTで1日3件までに制限                  | 削除・再出品や自動出品によるpointsの無制限な取得を抑えるため                |
+| buyerと販売店舗を同じtransactionで更新             | 購入成立と店舗成長の一部だけがcommitされる状態を作らないため                |
+| 最大Lv後もpointsを保持                             | 累計実績を失わず、将来level追加時にも既存pointsを利用できるため             |
+| 進捗率を小数点以下切り捨て                         | 次の境界へ未到達なのに100%と表示する状態を作らないため                      |
 
 ## API error codeとの対応
 
@@ -44,6 +51,96 @@ MySQLのsnake_case、制約、移行規則を固定します。ここにない�
 | 422    | `SELF_PURCHASE`           | 変更しない     |
 
 HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
+
+## `stores`
+
+全ユーザーは登録時に一つのStoreを持ち、`owner_id`は一意です。pointsの加算先はクライアント入力では
+なく、認証済みuser、lock後のProduct、Storeの所有関係からAPIが決めます。
+
+| 列            | 型                  | NULL | default   | 説明                                |
+| ------------- | ------------------- | ---- | --------- | ----------------------------------- |
+| `id`          | `VARCHAR(255)`      | 不可 | なし      | 既存互換のPK                        |
+| `owner_id`    | `VARCHAR(255)`      | 不可 | なし      | Storeを一つだけ所有するUser         |
+| `name`        | `VARCHAR(255)`      | 不可 | なし      | 店舗名                              |
+| `description` | `TEXT`              | 不可 | なし      | 店舗説明                            |
+| `level`       | `SMALLINT UNSIGNED` | 不可 | `1`       | pointsから算出した現在level         |
+| `points`      | `INT UNSIGNED`      | 不可 | `0`       | 上限で切り捨てない累計店舗points    |
+| `sync_status` | `VARCHAR(32)`       | 不可 | `offline` | `connected` / `syncing` / `offline` |
+| `created_at`  | `TIMESTAMP`         | 可   | `NULL`    | 作成日時                            |
+| `updated_at`  | `TIMESTAMP`         | 可   | `NULL`    | 更新日時                            |
+
+### 制約とindex
+
+- `PRIMARY KEY (id)`
+- `UNIQUE (owner_id)`
+- `INDEX stores_sync_status_index (sync_status)`
+- `FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE RESTRICT`
+- `CHECK (level BETWEEN 1 AND 5)`
+
+### `points`と`level`
+
+`points`がlevel計算の正本で、`level`は検索・表示用に同じStore行へ保存する導出値です。対応は
+`0→Lv1`、`100→Lv2`、`300→Lv3`、`600→Lv4`、`1000→Lv5`とし、最大はLv5です。
+最大Lv到達後もpointsは加算して保存し、`level=5`を維持します。
+
+pointsを更新するtransactionでは、lock取得直後のpointsから`oldLevel`を、加算後のpointsから
+`newLevel`を計算し、pointsと`newLevel`を同時に保存します。`oldLevel < newLevel`の場合だけ、その結果を
+B-BUILD-03へ渡します。同じ`request_id`の再送、入力不正、競合、rollbackではlevel変更を発生させません。
+1回の加算で複数境界を越えた場合のjob単位はB-CONTRACT-06を正本とします。
+
+登録時は`points=0`、`level=1`です。既存Storeのpointsはbackfillや上限切り捨てをせず維持し、移行時に
+全行のlevelをpointsから再計算します。不一致が見つかった場合はpointsを正としてlevelを修復します。
+負数、少数、`NaN`、無限大は有効なpointsではなく、丸めて保存しません。
+
+`nextLevelPoints`、`levelProgressPercent`、`maxLevel`、`isMaxLevel`は保存列にせず、`docs/api.md`の
+共通規則でpointsから計算します。最大Lvでは順に`0`、`100`、`5`、`true`です。最大Lv以外の
+進捗率は小数点以下を切り捨てるため、次の境界へ未到達のStoreは最大99%になります。
+
+### points加算規則
+
+| 初回成功操作 | 加算対象                          | 加算points | 上限                         |
+| ------------ | --------------------------------- | ---------: | ---------------------------- |
+| 新規出品     | Productのsellerが所有する店舗     |         10 | JSTの暦日ごとに先着3件、30pt |
+| 購入成立     | buyerが所有する店舗               |         50 | 成立Transactionごと          |
+| 販売成立     | Productのsellerが所有する販売店舗 |        100 | 成立Transactionごと          |
+
+10 / 50 / 100はsourceや環境変数で変更しない契約値です。現行の`STORE_SALE_POINTS`は
+移行前の互換設定であり、確定契約の100 pointsを上書きしません。累計pointsはLv5の閾値1,000へ
+到達した後も加算します。`INT UNSIGNED`の範囲を超える加算はwrapさせず、操作全体をrollbackします。
+
+既存ProductまたはTransactionを返す冪等再送ではpointsを再加算しません。入力不正、競合、自己購入、
+売り切れ、所有店舗の欠落、またはtransaction失敗時も加算しません。Productをsoft deleteしても、
+加算済みpointsは減算せず、そのProductが使用した日次枠も戻しません。過去のProductやTransactionへ
+pointsをbackfillしません。
+
+#### 出品の日次上限
+
+追加のpoints台帳は作らず、Store行を同一店舗の出品mutexとして使います。新規出品は次を一つの
+MySQL transactionで行います。
+
+1. 出品者のStoreを`FOR UPDATE`し、Storeの所有者が認証済みuserと一致することを確認する。
+2. `(seller_id, listing_request_id)`を再確認する。既存Productがあれば現在値を返し、pointsを更新しない。
+3. DB時刻を一度取得し、その値をProductの`created_at`にも使う。
+4. その時刻が属する`Asia/Tokyo`の暦日をUTCの半開区間`[start, nextStart)`へ変換する。
+5. 同じ`store_id`で`listing_request_id IS NOT NULL`かつ`created_at`が区間内のProduct数を数える。
+   `deleted_at`や`status`では絞り込まない。移行前の`listing_request_id IS NULL`行は数えない。
+6. Productを作成し、手順5の件数が3未満の場合だけ`points = points + 10`として`level`も再計算する。
+7. Product作成とpoints更新を一緒にcommitする。途中で失敗した場合は両方をrollbackする。
+
+Store行を先にlockするため、同じ店舗から異なる`requestId`で出品が同時実行されても直列化され、
+commitに成功した先着3件だけが加算対象になります。購入処理はProductを先にlockするため、出品処理は
+既存Productを`FOR UPDATE`せず、Store lock取得後の再確認とDB一意制約で同一requestの競合を解決します。
+
+#### 購入成立時の2店舗更新
+
+初回購入では、Productをlockして自己購入と`sold`を検証した後、buyerの`owner_id`から購入者店舗を、
+Productの`store_id`から販売店舗を確定します。二つのStore IDをUTF-8のbinary byte列で昇順に並べ、
+同じ順番で1行ずつ`FOR UPDATE`します。両方のStoreをlockできた場合だけ、Productの`sold`化、
+Transaction作成、購入者店舗への50 points、販売店舗への100 pointsと、両店舗の`level`再計算を行います。
+
+対象Storeが存在しない、所有関係が一致しない、またはどれか一つでも更新に失敗した場合は購入全体を
+rollbackします。すべての購入writerが同じStore lock順を使い、購入者と販売者が逆になる同時購入でも
+deadlockを避けます。
 
 ## `products`
 
