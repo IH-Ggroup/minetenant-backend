@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DatabaseReadinessError,
+  assertDatabaseServerSupported,
   evaluateDatabaseMetadata,
   readinessActions,
   readinessProblems,
@@ -13,6 +14,13 @@ const columns = Object.entries(REQUIRED_SCHEMA).flatMap(
     requiredColumns.map((columnName) => ({ tableName, columnName })),
 );
 const indexes = [
+  {
+    tableName: 'schema_migrations',
+    indexName: 'PRIMARY',
+    nonUnique: 0,
+    sequence: 1,
+    columnName: 'version',
+  },
   {
     tableName: 'users',
     indexName: 'email_unique',
@@ -47,6 +55,30 @@ describe('database readiness', () => {
     expect(supportsMySqlVersion('11.4.8-MariaDB', 'MariaDB Server')).toBe(
       false,
     );
+  });
+
+  it('checks server compatibility without requiring application tables', async () => {
+    const db = {
+      async query<T>(sql: string): Promise<T[]> {
+        if (sql.includes('SELECT DATABASE()')) {
+          return [
+            {
+              database: 'minetenant',
+              version: '8.4.11',
+              versionComment: 'MySQL Community Server',
+            },
+          ] as T[];
+        }
+        return [];
+      },
+    };
+
+    await expect(
+      assertDatabaseServerSupported(db, 'minetenant'),
+    ).resolves.toMatchObject({
+      versionSupported: true,
+      missingTables: [],
+    });
   });
 
   it('accepts the complete Hono schema', () => {
@@ -85,8 +117,8 @@ describe('database readiness', () => {
       '未作成のテーブル',
     );
     expect(readinessActions(readiness)).toEqual([
-      'ローカル環境では npm run dev で未作成テーブルを追加してください。',
-      '既存テーブルは自動変更しません。DBをバックアップし、不足項目用のスキーマ変更を作成・適用してください。',
+      'DBをバックアップし、schema_migrations の履歴と実際のテーブルを確認してください。',
+      'DBをバックアップし、schema_migrations の履歴と不足している列・一意制約を確認してください。',
     ]);
     expect(new DatabaseReadinessError(readiness).code).toBe(
       'MINETENANT_SCHEMA_MISMATCH',
@@ -109,7 +141,7 @@ describe('database readiness', () => {
     );
     expect(readiness.missingUniqueKeys).toEqual([]);
     expect(readinessActions(readiness)).toEqual([
-      'ローカル環境では npm run dev で未作成テーブルを追加してください。',
+      'DBをバックアップし、schema_migrations の履歴と実際のテーブルを確認してください。',
     ]);
     expect(new DatabaseReadinessError(readiness).code).toBe(
       'MINETENANT_SCHEMA_INCOMPLETE',

@@ -3,8 +3,12 @@ import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
 import { readConfig } from './config.js';
 import { createDatabase } from './db.js';
+import { assertMigrationsCurrent, migrations } from './db/migrations/index.js';
 import { formatErrorForLog } from './diagnostics.js';
-import { assertDatabaseReady } from './readiness.js';
+import {
+  assertDatabaseReady,
+  assertDatabaseServerSupported,
+} from './readiness.js';
 
 async function start(): Promise<void> {
   let config;
@@ -20,6 +24,8 @@ async function start(): Promise<void> {
 
   const db = createDatabase(config);
   try {
+    await assertDatabaseServerSupported(db, config.dbDatabase);
+    await assertMigrationsCurrent(db, migrations);
     await assertDatabaseReady(db, config.dbDatabase);
   } catch (error) {
     console.error(formatErrorForLog('API_STARTUP_FAILED', error, config));

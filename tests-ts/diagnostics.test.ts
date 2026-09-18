@@ -56,6 +56,16 @@ describe('database diagnostics', () => {
     );
   });
 
+  it('refuses API startup while registered migrations are pending', () => {
+    const error = Object.assign(new Error('0001_private_detail'), {
+      code: 'MINETENANT_MIGRATION_PENDING',
+    });
+    const output = formatErrorForLog('API_STARTUP_FAILED', error, config);
+    expect(output).toContain('MINETENANT_MIGRATION_PENDING');
+    expect(output).toContain('npm run db:migrate');
+    expect(output).not.toContain(error.message);
+  });
+
   it('rejects unsafe database identifiers used by the administrator command', () => {
     expect(quoteDatabaseName('minetenant_test')).toBe('`minetenant_test`');
     expect(() => quoteDatabaseName('minetenant; DROP DATABASE mysql')).toThrow(

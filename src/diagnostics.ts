@@ -81,14 +81,20 @@ export function databaseDiagnostic(
         code,
         summary: 'APIに必要なテーブルが不足しています。',
         action:
-          'ローカル環境では npm run dev が不足テーブルを安全に追加し、再診断します。',
+          'DBをバックアップし、npm run doctor の結果と schema_migrations の履歴を確認してください。',
       };
     case 'MINETENANT_SCHEMA_MISMATCH':
       return {
         code,
         summary: '既存テーブルの列または一意制約がAPIの要件と一致しません。',
         action:
-          'npm run doctor で不足項目を確認してください。既存テーブルは自動変更しないため、DBをバックアップしてから不足項目用のスキーマ変更を適用してください。',
+          'DBをバックアップし、npm run doctor の結果と schema_migrations の履歴を確認してください。',
+      };
+    case 'MINETENANT_MIGRATION_PENDING':
+      return {
+        code,
+        summary: '未適用のDBマイグレーションがあります。',
+        action: 'APIを起動する前に npm run db:migrate を実行してください。',
       };
     case 'MINETENANT_DATABASE_UNSUPPORTED':
       return {

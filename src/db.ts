@@ -11,9 +11,53 @@ export interface SqlExecutor {
   execute(sql: string, params?: unknown[]): Promise<{ affectedRows: number }>;
 }
 
+export interface ConnectionLease {
+  /** Prevent a connection with uncertain session state from returning to the pool. */
+  discard(): void;
+}
+
+export interface MigrationExecutor extends SqlExecutor {
+  /** Use only for DML-only atomic sections; MySQL DDL commits implicitly. */
+  transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T>;
+}
+
 export interface Database extends SqlExecutor {
+  withConnection<T>(
+    fn: (connection: MigrationExecutor, lease: ConnectionLease) => Promise<T>,
+  ): Promise<T>;
   transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T>;
   close(): Promise<void>;
+}
+
+function migrationExecutor(
+  connection: PoolConnection,
+  discard: () => void,
+): MigrationExecutor {
+  const sql = executor(connection);
+  let inTransaction = false;
+  return {
+    ...sql,
+    async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+      if (inTransaction)
+        throw new Error('Nested transactions are not allowed.');
+      inTransaction = true;
+      await connection.beginTransaction();
+      try {
+        const result = await fn(sql);
+        await connection.commit();
+        return result;
+      } catch (error) {
+        try {
+          await connection.rollback();
+        } catch {
+          discard();
+        }
+        throw error;
+      } finally {
+        inTransaction = false;
+      }
+    },
+  };
 }
 
 function executor(connection: Pool | PoolConnection): SqlExecutor {
@@ -49,6 +93,23 @@ export function createDatabase(config: AppConfig): Database {
   });
   return {
     ...executor(pool),
+    async withConnection<T>(
+      fn: (connection: MigrationExecutor, lease: ConnectionLease) => Promise<T>,
+    ): Promise<T> {
+      const connection = await pool.getConnection();
+      let discard = false;
+      const discardConnection = () => {
+        discard = true;
+      };
+      try {
+        return await fn(migrationExecutor(connection, discardConnection), {
+          discard: discardConnection,
+        });
+      } finally {
+        if (discard) connection.destroy();
+        else connection.release();
+      }
+    },
     async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
       for (let attempt = 0; ; attempt++) {
         const connection = await pool.getConnection();
