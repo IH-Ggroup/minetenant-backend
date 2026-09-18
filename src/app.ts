@@ -10,6 +10,7 @@ import { HTTPException } from 'hono/http-exception';
 import { sessionMiddleware, requireAuth } from './auth.js';
 import type { AppConfig } from './config.js';
 import type { Database } from './db.js';
+import { formatErrorForLog } from './diagnostics.js';
 import { HttpError } from './domain/errors.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createCatalogRoutes } from './routes/catalog.js';
@@ -39,10 +40,7 @@ export function createApp({
     if (error instanceof HTTPException)
       return c.json({ message: error.message }, error.status);
     // Never expose SQL values, password hashes, tokens or stack traces in API responses/logs.
-    console.error(
-      'API_REQUEST_FAILED',
-      error instanceof Error ? error.name : 'UnknownError',
-    );
+    console.error(formatErrorForLog('API_REQUEST_FAILED', error, config));
     return c.json({ message: 'Server Error' }, 500);
   });
   app.notFound((c) => c.json({ message: 'Not found.' }, 404));

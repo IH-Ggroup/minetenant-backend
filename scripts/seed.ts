@@ -121,9 +121,9 @@ export async function seedDemo(
       ],
     ]) {
       await tx.execute(
-        `INSERT INTO users (id,name,email,role,role_label,avatar_initial,password,email_verified_at,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [...user, password, seededAt, seededAt, seededAt],
+        `INSERT INTO users (id,name,email,role,role_label,avatar_initial,password,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)`,
+        [...user, password, seededAt, seededAt],
       );
     }
     for (const store of [

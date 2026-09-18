@@ -28,8 +28,6 @@ export interface UserRow {
   role_label: string;
   avatar_initial: string;
   store_id?: string | null;
-  email_verified_at?: Timestamp;
-  remember_token?: string | null;
   created_at?: Timestamp;
   updated_at?: Timestamp;
 }

@@ -6,7 +6,7 @@ import type {
   UserRow,
 } from './types.js';
 
-// Laravel's Carbon::toISOString() uses UTC with six fractional digits.
+// API timestamps use UTC with six fractional digits.
 export function serializeTimestamp(value: Timestamp): string | null {
   if (value === null) return null;
   const raw = value instanceof Date ? value.toISOString() : value;

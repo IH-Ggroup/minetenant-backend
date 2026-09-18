@@ -1,8 +1,8 @@
 # MineTenant API v1
 
 開発URLは`http://localhost:8787`です。バックエンドはNode.js上のTypeScript / Honoで
-動作し、既存のMySQLデータとAPI形式を引き継ぎます。JSONのキーはフロントの
-TypeScript型に合わせてcamelCaseで返します。
+動作し、MySQLへデータを保存します。JSONのキーはフロントのTypeScript型に合わせて
+camelCaseで返します。
 
 > **B-CONTRACT-01の読み方**
 > 「現行から確定契約への変更」と「一点物Product」から「Web購入」までの各節は、
@@ -107,10 +107,9 @@ POST・DELETE時には`XSRF-TOKEN`をURLデコードした値を`X-XSRF-TOKEN`�
 CSRFトークンを固定の変数へ保存せず、書き込みのたびにCookieを読み直してください。
 認証情報をBearerトークンとして送る方式ではありません。
 
-Honoへの切り替え時は、CSRF Cookieを取得して一度ログインし直してください。
-既存ユーザーとLaravelのbcryptパスワードは引き継ぎますが、Laravelの暗号化セッションは
-引き継ぎません。セッションCookieの既定名は`minetenant_hono_session`で、
-`XSRF-TOKEN` Cookie名とヘッダーの送り方は従来と同じです。
+セッションCookieの既定名は`minetenant_hono_session`です。保存済みのbcryptパスワードは
+`$2b$`・`$2y$`のどちらも照合できます。`XSRF-TOKEN` Cookieと
+`X-XSRF-TOKEN`ヘッダーを組み合わせてCSRFを検証します。
 
 ### 新規登録
 

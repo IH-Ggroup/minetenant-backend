@@ -165,7 +165,7 @@ export function createAuthRoutes(
       [email],
     );
     const storedHash = user?.password ?? (await dummyHash);
-    // Laravel emits $2y$ hashes; the algorithm is the same as bcrypt's $2b$ variant.
+    // bcrypt $2y$ hashes use the same algorithm as the $2b$ variant.
     const valid = await bcrypt.compare(
       password,
       storedHash.replace(/^\$2y\$/, '$2b$'),

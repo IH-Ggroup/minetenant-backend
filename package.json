@@ -7,12 +7,16 @@
     "node": ">=22.22.2"
   },
   "scripts": {
+    "predev": "node scripts/predev.mjs",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/src/server.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "setup": "tsx scripts/setup.ts",
+    "db:bootstrap": "tsx scripts/db-bootstrap.ts",
+    "doctor": "tsx scripts/doctor.ts",
+    "ci:mysql": "tsx scripts/configure-ci-mysql.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "lint": "eslint src scripts tests-ts",

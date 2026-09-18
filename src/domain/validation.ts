@@ -2,10 +2,10 @@ import { HttpError, ValidationError, type ValidationErrors } from './errors.js';
 
 export type Input = Record<string, unknown>;
 
-// Match Laravel Str::trim, including invisible Unicode characters and NUL.
+// Trim whitespace, NUL and invisible Unicode control/format characters.
 const trimmedCharacters = String.raw`\s\0\u0085\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u2000-\u200f\u202f\u205f\u2060-\u2065\u206a-\u206f\u2800\u3000\u3164\ufeff\uffa0\u{1d159}\u{1d173}-\u{1d17a}\u{e0020}`;
 const trimEdges = new RegExp(
-  // eslint-disable-next-line no-misleading-character-class -- These marks are intentionally trimmed individually, as in Laravel.
+  // eslint-disable-next-line no-misleading-character-class -- These marks are intentionally trimmed individually.
   `^[${trimmedCharacters}]+|[${trimmedCharacters}]+$`,
   'gu',
 );
@@ -36,8 +36,8 @@ function parseFormEntries(entries: Iterable<[string, unknown]>): Input {
   const input: Input = Object.create(null) as Input;
   for (const [rawKey, value] of entries) {
     const key = rawKey.split('\0', 1)[0]!.replace(/^ +/, '');
-    // PHP parses bracketed fields as arrays. Preserve their non-string nature
-    // so inputs such as keyword[]=x or multipart sellerId[]=x fail validation.
+    // Bracketed fields represent array-like values. Preserve their non-string
+    // nature so inputs such as keyword[]=x or multipart sellerId[]=x fail validation.
     const bracket = key.indexOf('[');
     const array = bracket !== -1 && key.indexOf(']', bracket) !== -1;
     const name = (
@@ -181,8 +181,8 @@ export class Validator {
   ): number | undefined {
     if (this.absent(field, options)) return undefined;
     const value = this.data[field];
-    // Laravel's non-strict integer rule accepts integer strings (including +1)
-    // but rejects decimals and strings with leading zeroes.
+    // Accept canonical signed integer strings (including +1), but reject
+    // decimals and strings with leading zeroes.
     const numeric =
       typeof value === 'number' || value === true
         ? Number(value)

@@ -9,7 +9,7 @@ import {
   type TestClient,
 } from './helpers.js';
 
-describe('session authentication and Laravel compatibility', () => {
+describe('session authentication', () => {
   let setup: TestApp;
   let client: TestClient;
 
@@ -192,8 +192,8 @@ describe('session authentication and Laravel compatibility', () => {
     },
   );
 
-  it('accepts existing Laravel $2y$ passwords and normalizes email on login', async () => {
-    const hash = (await bcrypt.hash('laravel-password', 4)).replace(
+  it('accepts bcrypt $2y$ passwords and normalizes email on login', async () => {
+    const hash = (await bcrypt.hash('bcrypt-2y-password', 4)).replace(
       /^\$2b\$/,
       '$2y$',
     );
@@ -204,7 +204,7 @@ describe('session authentication and Laravel compatibility', () => {
     const originalSession = client.cookies.get(setup.config.sessionCookie);
     const response = await client.login(
       ' DEMO@MINETENANT.JP ',
-      'laravel-password',
+      'bcrypt-2y-password',
     );
     await expectStatus(response, 200);
     const { data } = await response.json();
@@ -213,7 +213,6 @@ describe('session authentication and Laravel compatibility', () => {
       storeId: 'store-yamada',
     });
     expect(data).not.toHaveProperty('password');
-    expect(data).not.toHaveProperty('remember_token');
     expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(
       originalSession,
     );

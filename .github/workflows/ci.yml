@@ -1,0 +1,105 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Fresh clone and quality checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_ROOT_HOST: '%'
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --host=127.0.0.1 --user=root --password=root"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Run fresh-clone development preflight
+        run: npm run predev
+        env:
+          MYSQL_ADMIN_PASSWORD: root
+          DB_BOOTSTRAP_USER_HOSTS: '%'
+
+      - name: Run development preflight again to verify idempotency
+        run: npm run predev
+        env:
+          MYSQL_ADMIN_PASSWORD: root
+          DB_BOOTSTRAP_USER_HOSTS: '%'
+
+      - name: Enable MySQL trigger support for transaction tests
+        run: npm run ci:mysql
+        env:
+          MYSQL_ADMIN_PASSWORD: root
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run type check
+        run: npm run typecheck
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build backend
+        run: npm run build
+
+      - name: Smoke test compiled API
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_log="$RUNNER_TEMP/minetenant-api.log"
+          npm start >"$api_log" 2>&1 &
+          api_pid=$!
+          cleanup() {
+            kill "$api_pid" 2>/dev/null || true
+            wait "$api_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:8787/api/hello | grep --quiet 'MineTenant API is running.'; then
+              exit 0
+            fi
+            if ! kill -0 "$api_pid" 2>/dev/null; then
+              cat "$api_log"
+              exit 1
+            fi
+            sleep 0.2
+          done
+          cat "$api_log"
+          exit 1

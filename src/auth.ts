@@ -214,7 +214,7 @@ export async function checkAuthRateLimit(
         };
       buckets.push({ key, hits, max: limit.max, expiresAt });
     }
-    // Match Laravel: a request rejected by either bucket consumes neither.
+    // A request rejected by either bucket consumes neither allowance.
     let remaining = Infinity;
     let max = 30;
     for (const bucket of buckets) {
