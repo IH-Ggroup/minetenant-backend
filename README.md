@@ -1,32 +1,83 @@
 # MineTenant Backend — Hono / TypeScript
 
-Node.js上のHono APIです。既存MySQLと、React・Minecraft MODが利用する
-APIのURL・JSON形式・認証・購入処理を引き継いでいます。
+Node.js上のHono APIです。React・Minecraft MODが利用する
+API、Cookie認証、在庫・購入処理を提供します。
 
-## 起動
+## 最短セットアップ
 
-Node.js 22.22.2以上とMySQL 8.4を用意します。PHP・ComposerはHonoの起動に不要です。
+Node.js 22.22.2以上とMySQL 8.0以上を用意します（CIではMySQL 8.4で検証します）。
+ローカル起動にDockerは不要です。
+Node.jsは[`.nvmrc`](.nvmrc)と`package.json`で同じ版を指定しています。
+
+MySQLは`localhost`からTCP接続でき、DBとユーザーを作成できる管理ユーザーが必要です。
+macOS・Windowsの通常の`root`（パスワードなしを含む）は初回プロンプトで利用できます。
+Ubuntu・Debian等で`root`が`auth_socket`専用の場合は、TCP・パスワード認証できる管理ユーザーを用意し、
+`MYSQL_ADMIN_USER`へ指定してください。
+
+初回も2回目以降も、MySQLを起動してから実行するコマンドはこれだけです。
 
 ```bash
-npm ci
-npm run setup
 npm run dev
 ```
 
-`npm run setup`は未作成の場合だけ`.env`を作成し、未作成のテーブルを追加します。
-空のDBにだけデモデータを入れ、**既存データやパスワードは上書きしません。**
-Laravelで使用している`.env`の`DB_*`設定もそのまま利用できます。
+`npm run dev`の起動前処理は次を順に行います。
 
-MySQLを初めて用意する場合は、管理ユーザーで
-[database/setup-local.sql](database/setup-local.sql)を実行してからセットアップします。
-既存DBや既存ユーザーのパスワードは初期化しません。
+- 依存パッケージがない場合、または`package-lock.json`更新後だけ`npm ci`
+- 未作成の場合だけ`.env.example`から`.env`を作成
+- MySQLの起動状態と接続先を確認
+- `npm run doctor`でDBと必須テーブルを診断
+- DBまたは接続用ユーザーが未作成の場合だけ、安全な初期DB準備を開始
+- テーブルだけが不足している場合は、既存部分を変えず不足テーブルを追加
+- 初期準備後にもう一度doctorを通してからHonoを起動
+
+初期DB準備が必要なときだけ、MySQL管理ユーザー（初期値は`root`）の
+パスワード入力が表示されます。入力内容は画面や`.env`へ保存しません。その後、次をまとめて行います。
+
+- 開発DB・テストDB・アプリ接続用ユーザーの作成
+- 未作成テーブルの追加
+- 空DBへのデモデータ投入
+
+初回に作る`.env`には、このclone専用のランダムなDBユーザー名とパスワードを生成します。
+そのため、PCに同名ユーザーが残っていても上書きせず、別cloneの接続も壊しません。
+DB・テーブル・既存データは上書きせず、既存の`.env`がある場合は内容を一切変更しません。
+既存DBの設定不一致やスキーマ不一致を検出した場合は、自動変更せず診断を表示して停止します。
+
+MySQLの管理ユーザーが`root`以外の場合は、実行前に`MYSQL_ADMIN_USER`を設定します。
+CIなど対話入力できない環境だけ`MYSQL_ADMIN_PASSWORD`も設定できます。これらは`.env`へ保存しません。
+
+MySQL本体のインストールやOSサービスの起動は自動化しません。MySQLが停止している場合は、
+安全のためDB操作をせず、起動を案内して終了します。
+
+### 既にDBを準備済みの場合
+
+既存環境や更新取り込み後も`npm run dev`だけです。既存の`.env`を上書きせず、
+接続・スキーマを診断してから起動します。不足テーブルだけなら安全に追加し、
+空のDBにだけデモデータを入れます。
 
 [疎通確認](http://localhost:8787/api/hello)が
 `MineTenant API is running.`を返せば起動完了です。停止は`Ctrl+C`です。
+APIは起動前にDB接続を確認するため、DBが未準備のまま見かけ上起動して
+`/auth/me`だけ500になることはありません。
 
-**8787番ポートでLaravelが起動中の場合は、そのプロセスを止めてからHonoを起動してください。**
+**8787番ポートが使用中の場合は、そのプロセスを止めてからHonoを起動してください。**
 比較用に別ポートで起動する場合は`PORT=8788 npm run dev`を使えます。
 Windows PowerShellでは`$env:PORT="8788"; npm run dev`です。
+
+## 起動できないとき
+
+最初に`npm run doctor`を実行してください。Node.js、MySQLの接続先・バージョン、DB、
+必須テーブル・列・一意制約をパスワードを表示せず確認します。よくあるエラーは次のように対処できます。
+
+| コード                         | 原因                                     | 対処                                                  |
+| ------------------------------ | ---------------------------------------- | ----------------------------------------------------- |
+| `ECONNREFUSED`                 | MySQL停止、またはhost・port違い          | MySQLを起動し、`.env`の`DB_HOST`・`DB_PORT`を確認     |
+| `ER_ACCESS_DENIED_ERROR`       | 接続用ユーザー未作成、または認証情報違い | 初回は`npm run dev`が自動準備。既存`.env`は設定を確認 |
+| `ER_BAD_DB_ERROR`              | `DB_DATABASE`のDBが未作成                | `npm run dev`がローカルDBを自動準備                   |
+| `MINETENANT_SCHEMA_INCOMPLETE` | 必須テーブルが未作成                     | `npm run dev`が不足テーブルを追加                     |
+| `MINETENANT_SCHEMA_MISMATCH`   | 既存テーブルの列・一意制約が不足         | DBをバックアップし、専用のスキーマ変更を適用          |
+
+セットアップ、doctor、API起動はいずれも同じ診断を表示します。ドライバーの長いスタックトレースより先に、
+エラーコード・接続先・次のコマンドを確認してください。
 
 ## フロントとの接続
 
@@ -39,11 +90,10 @@ VITE_API_BASE_URL=http://localhost:8787/api/v1
 フロントは`http://localhost:5173`で開きます。
 APIとブラウザで`localhost`と`127.0.0.1`を混在させないでください。
 
-Cookie認証、`XSRF-TOKEN`、`X-XSRF-TOKEN`ヘッダー、
-`credentials: 'include'`は従来と同じです。
-**切り替え後は一度ログインし直してください。**
-Laravelの暗号化セッションは移さず、Hono専用Cookieと`hono_sessions`を使用します。
-既存のbcryptパスワード（`$2y$`）はそのまま照合できます。
+Cookie認証では`XSRF-TOKEN`、`X-XSRF-TOKEN`ヘッダー、
+`credentials: 'include'`を使用します。
+セッションはHono専用Cookieと`hono_sessions`へ保存します。
+bcryptパスワード（`$2b$`・`$2y$`）を照合できます。
 
 空DBの初期アカウントは`demo@minetenant.jp`、`seller@minetenant.jp`、
 パスワードは双方`password`です。ローカル開発専用です。
@@ -80,14 +130,10 @@ scripts/          初期準備・テーブル作成・空DB専用デモデータ
 tests-ts/         実MySQLでのAPI・認証・並行購入テスト
 ```
 
-既存PHPソース・PHPテストは移行の照合用に保持しています。
-`npm`の起動・ビルド・テストからは使用しません。
-以前の手順は[Laravel版の記録](docs/laravel-reference.md)に分離しています。
-
 ## 検証
 
 [database/setup-local.sql](database/setup-local.sql)は専用の
-`minetenant_hono_migration_test`も準備します。`npm test`はこのDBだけを初期化します。
+`minetenant_test`も準備します。`npm test`はこのDBだけを初期化します。
 
 ```bash
 npm run typecheck
@@ -108,7 +154,7 @@ npm run format:check
 ## 公開デモとCloudflare
 
 今回の実行環境は**Hono + Node.js + 既存MySQL**です。
-Cloudflare Workers + D1へのDB移行やデプロイは含みません。
+Cloudflare Workers + D1へのDB変更やデプロイは含みません。
 
 既存フロントWorkerのAPI転送と互換の保護をHono側にも実装しています。
 利用時は以下を設定し、Honoをループバックの専用ポートで起動します。
@@ -127,9 +173,7 @@ SESSION_SAME_SITE=lax
 Workerは同じ秘密値を`X-MineTenant-Origin-Token`で送信します。
 検証済みクライアントIPは`X-MineTenant-Client-IP`で送信し、
 Honoは秘密値確認後のループバック経由でのみこの値を信用します。
-Cookie転送はそのまま使用できますが、
-**既存のPHP起動用デモスクリプトはHonoを起動しません。**
-Honoの起動には`npm start`または`npm run dev`を使ってください。
+Cookie転送を利用できます。Honoの起動には`npm start`または`npm run dev`を使ってください。
 
 Minecraft専用APIは既存の未認証デモ仕様を維持し、公開モードでは遮断します。
 決済・配送・画像アップロード・Minecraft認証の追加は含みません。

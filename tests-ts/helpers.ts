@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { config as loadEnv } from 'dotenv';
 import type { Hono } from 'hono';
 import { createApp } from '../src/app.js';
 import { readConfig, type AppConfig } from '../src/config.js';
@@ -7,10 +8,13 @@ import type { AppEnv } from '../src/types.js';
 import { migrate } from '../scripts/migrate.js';
 import { seedDemo } from '../scripts/seed.js';
 
-const TEST_DATABASE = 'minetenant_hono_migration_test';
+const TEST_DATABASE = 'minetenant_test';
 
-/** Real MySQL, always separate from both development and the old Laravel test database. */
+loadEnv({ path: '.env', quiet: true });
+
+/** Real MySQL, always isolated from the development database. */
 export async function createTestApp(overrides: Partial<AppConfig> = {}) {
+  assertTestDatabaseIsolation(process.env);
   const config = {
     ...readConfig({
       ...process.env,
@@ -23,8 +27,10 @@ export async function createTestApp(overrides: Partial<AppConfig> = {}) {
       DB_HOST: process.env.TEST_DB_HOST ?? '127.0.0.1',
       DB_PORT: process.env.TEST_DB_PORT ?? '3306',
       DB_DATABASE: TEST_DATABASE,
-      DB_USERNAME: process.env.TEST_DB_USERNAME ?? 'minetenant',
-      DB_PASSWORD: process.env.TEST_DB_PASSWORD ?? 'minetenant',
+      DB_USERNAME:
+        process.env.TEST_DB_USERNAME ?? process.env.DB_USERNAME ?? 'minetenant',
+      DB_PASSWORD:
+        process.env.TEST_DB_PASSWORD ?? process.env.DB_PASSWORD ?? 'minetenant',
       BCRYPT_ROUNDS: '4',
       SESSION_SECURE_COOKIE: 'false',
       SESSION_SAME_SITE: 'lax',
@@ -72,6 +78,16 @@ export async function createTestApp(overrides: Partial<AppConfig> = {}) {
     },
     close: () => db.close(),
   };
+}
+
+export function assertTestDatabaseIsolation(
+  environment: NodeJS.ProcessEnv,
+): void {
+  if (environment.DB_DATABASE?.toLowerCase() === TEST_DATABASE.toLowerCase()) {
+    throw new Error(
+      'DB_DATABASE must not point at minetenant_test because npm test resets that database.',
+    );
+  }
 }
 
 export type TestApp = Awaited<ReturnType<typeof createTestApp>>;

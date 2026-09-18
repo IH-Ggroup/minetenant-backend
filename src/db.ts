@@ -43,7 +43,7 @@ export function createDatabase(config: AppConfig): Database {
     connectionLimit: 10,
     multipleStatements: false,
   });
-  // Laravel stores UTC timestamps. Set the server session as well as the JS conversion.
+  // Keep MySQL sessions and JavaScript timestamp conversion on UTC.
   pool.on('connection', (connection) => {
     connection.query("SET time_zone = '+00:00'");
   });

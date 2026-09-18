@@ -22,7 +22,7 @@ async function body(response: Response, status = 200) {
   return response.json();
 }
 
-describe('Laravel API compatibility on MySQL', () => {
+describe('Hono API on MySQL', () => {
   let test: TestApp;
   let buyer: TestClient;
   let seller: TestClient;
@@ -79,7 +79,7 @@ describe('Laravel API compatibility on MySQL', () => {
     ).toBe(2);
   });
 
-  it("matches PHP's last-value precedence for duplicate scalar and bracketed query fields", async () => {
+  it('uses last-value precedence for duplicate scalar and bracketed query fields', async () => {
     const scalarLast = await body(
       await guest.request('/api/v1/products?keyword[]=x&keyword=stool'),
     );
@@ -126,7 +126,7 @@ describe('Laravel API compatibility on MySQL', () => {
     ).toBe(1);
   });
 
-  it("allows Laravel's empty prohibited values while fixing the Minecraft purchase source", async () => {
+  it('allows empty prohibited values while fixing the Minecraft purchase source', async () => {
     const payload = {
       productId: 'product-stool',
       buyerId: 'user-buyer',
@@ -311,7 +311,7 @@ describe('Laravel API compatibility on MySQL', () => {
     expect(listed.data[0].id).toBe(created.data.id);
   });
 
-  it('accepts explicit owner IDs and Laravel-compatible integer strings', async () => {
+  it('accepts explicit owner IDs and signed integer strings', async () => {
     const result = await body(
       await seller.json('/api/v1/products', 'POST', {
         ...productPayload,
@@ -780,7 +780,7 @@ describe('Laravel API compatibility on MySQL', () => {
     });
   });
 
-  it('returns public store data and owner-only dashboard with exact legacy aggregates', async () => {
+  it('returns public store data and owner-only dashboard with exact aggregates', async () => {
     const store = await body(await guest.request('/api/v1/stores/store-mine'));
     expect(store.data).toEqual({
       id: 'store-mine',

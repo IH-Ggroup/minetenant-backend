@@ -7,7 +7,11 @@ import bcrypt from 'bcryptjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '../scripts/migrate.js';
 import { seedDemo } from '../scripts/seed.js';
-import { createTestApp, type TestApp } from './helpers.js';
+import {
+  assertTestDatabaseIsolation,
+  createTestApp,
+  type TestApp,
+} from './helpers.js';
 
 const businessTables = ['users', 'stores', 'products', 'purchase_transactions'];
 
@@ -167,6 +171,15 @@ describe('safe migration and initial data setup', () => {
 });
 
 describe('setup command boundaries', () => {
+  it('refuses to reset the configured development database', () => {
+    expect(() =>
+      assertTestDatabaseIsolation({ DB_DATABASE: 'MineTenant_Test' }),
+    ).toThrow('npm test resets that database');
+    expect(() =>
+      assertTestDatabaseIsolation({ DB_DATABASE: 'minetenant' }),
+    ).not.toThrow();
+  });
+
   it('rejects production setup and seeding before database access and preserves the existing env file', async () => {
     const directory = await mkdtemp(
       join(tmpdir(), 'minetenant-hono-setup-test-'),
@@ -195,7 +208,7 @@ describe('setup command boundaries', () => {
               DB_CONNECTION: 'mysql',
               DB_HOST: '127.0.0.1',
               DB_PORT: '1',
-              DB_DATABASE: 'minetenant_hono_migration_test',
+              DB_DATABASE: 'minetenant_test',
               DB_USERNAME: 'unused',
               DB_PASSWORD: 'unused',
               DB_URL: '',
@@ -210,6 +223,76 @@ describe('setup command boundaries', () => {
         expect(result.stderr).not.toContain('ECONNREFUSED');
       }
       expect(await readFile(join(directory, '.env'), 'utf8')).toBe(original);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps environment generation in npm run dev instead of copying fixed template credentials', async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), 'minetenant-env-entrypoint-test-'),
+    );
+    try {
+      await writeFile(
+        join(directory, '.env.example'),
+        'APP_ENV=local\nDB_USERNAME=minetenant\nDB_PASSWORD=minetenant\n',
+      );
+      for (const script of ['setup', 'db-bootstrap']) {
+        const result = spawnSync(
+          process.execPath,
+          [
+            '--import',
+            import.meta.resolve('tsx'),
+            fileURLToPath(new URL(`../scripts/${script}.ts`, import.meta.url)),
+          ],
+          {
+            cwd: directory,
+            env: { ...process.env, MYSQL_ADMIN_PASSWORD: '' },
+            encoding: 'utf8',
+            timeout: 5000,
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain('npm run dev');
+      }
+      await expect(readFile(join(directory, '.env'), 'utf8')).rejects.toThrow(
+        /ENOENT/,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('explains an unsafe remote administrator target before asking for credentials', async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), 'minetenant-bootstrap-guard-test-'),
+    );
+    try {
+      await writeFile(join(directory, '.env'), 'APP_ENV=local\n');
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          import.meta.resolve('tsx'),
+          fileURLToPath(new URL('../scripts/db-bootstrap.ts', import.meta.url)),
+        ],
+        {
+          cwd: directory,
+          env: {
+            ...process.env,
+            APP_ENV: 'local',
+            DB_HOST: 'db.example.test',
+            MYSQL_ADMIN_PASSWORD: '',
+          },
+          encoding: 'utf8',
+          timeout: 5000,
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('localhost or 127.0.0.1');
+      expect(result.stderr).not.toContain('DB_BOOTSTRAP_FAILED Error');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

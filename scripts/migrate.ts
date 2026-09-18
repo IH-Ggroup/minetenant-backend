@@ -3,14 +3,14 @@ import { pathToFileURL } from 'node:url';
 import { createDatabase, type Database } from '../src/db.js';
 import { readConfig } from '../src/config.js';
 
-// Same business tables/columns/indexes as Laravel. Existing rows are never rebuilt.
+// Create missing business tables and indexes without rebuilding existing rows.
 const tables = [
   `CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(255) PRIMARY KEY, name VARCHAR(255) NOT NULL,
-    email VARCHAR(255) NOT NULL UNIQUE, email_verified_at TIMESTAMP NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
     password VARCHAR(255) NOT NULL, role VARCHAR(32) NOT NULL,
     role_label VARCHAR(255) NOT NULL, avatar_initial VARCHAR(8) NOT NULL,
-    remember_token VARCHAR(100) NULL, created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL,
+    created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL,
     INDEX users_role_index(role)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `CREATE TABLE IF NOT EXISTS stores (
@@ -47,7 +47,7 @@ const tables = [
     FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE RESTRICT,
     FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE RESTRICT
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-  // Laravel's encrypted sessions are intentionally not interpreted. Users sign in once after switching.
+  // Application sessions are stored only in hono_sessions.
   `CREATE TABLE IF NOT EXISTS hono_sessions (
     id CHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
     user_id VARCHAR(255) NULL, csrf_token CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
