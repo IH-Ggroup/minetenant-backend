@@ -2,64 +2,88 @@ import type { Database } from './db.js';
 
 export type ReadinessQuery = Pick<Database, 'query'>;
 
+export interface SchemaRequirements {
+  tables: Readonly<Record<string, readonly string[]>>;
+  uniqueKeys: readonly { table: string; column: string }[];
+}
+
+export const INITIAL_SCHEMA_REQUIREMENTS = {
+  tables: {
+    users: [
+      'id',
+      'name',
+      'email',
+      'password',
+      'role',
+      'role_label',
+      'avatar_initial',
+      'created_at',
+      'updated_at',
+    ],
+    stores: [
+      'id',
+      'owner_id',
+      'name',
+      'description',
+      'level',
+      'points',
+      'sync_status',
+      'created_at',
+      'updated_at',
+    ],
+    products: [
+      'id',
+      'store_id',
+      'seller_id',
+      'name',
+      'description',
+      'price',
+      'stock',
+      'category',
+      'theme',
+      'emoji',
+      'created_at',
+      'updated_at',
+    ],
+    purchase_transactions: [
+      'id',
+      'request_id',
+      'product_id',
+      'buyer_id',
+      'seller_id',
+      'source',
+      'amount',
+      'status',
+      'created_at',
+      'updated_at',
+    ],
+    hono_sessions: ['id', 'user_id', 'csrf_token', 'expires_at'],
+    hono_rate_limits: ['key_hash', 'hits', 'expires_at'],
+  },
+  uniqueKeys: [
+    { table: 'users', column: 'email' },
+    { table: 'stores', column: 'owner_id' },
+    { table: 'purchase_transactions', column: 'request_id' },
+  ],
+} as const satisfies SchemaRequirements;
+
 export const REQUIRED_SCHEMA = {
-  users: [
-    'id',
-    'name',
-    'email',
-    'password',
-    'role',
-    'role_label',
-    'avatar_initial',
-    'created_at',
-    'updated_at',
-  ],
-  stores: [
-    'id',
-    'owner_id',
-    'name',
-    'description',
-    'level',
-    'points',
-    'sync_status',
-    'created_at',
-    'updated_at',
-  ],
-  products: [
-    'id',
-    'store_id',
-    'seller_id',
-    'name',
-    'description',
-    'price',
-    'stock',
-    'category',
-    'theme',
-    'emoji',
-    'created_at',
-    'updated_at',
-  ],
-  purchase_transactions: [
-    'id',
-    'request_id',
-    'product_id',
-    'buyer_id',
-    'seller_id',
-    'source',
-    'amount',
-    'status',
-    'created_at',
-    'updated_at',
-  ],
-  hono_sessions: ['id', 'user_id', 'csrf_token', 'expires_at'],
-  hono_rate_limits: ['key_hash', 'hits', 'expires_at'],
+  ...INITIAL_SCHEMA_REQUIREMENTS.tables,
+  schema_migrations: ['version', 'applied_at'],
 } as const;
 
-const REQUIRED_UNIQUE_KEYS = [
-  { table: 'users', column: 'email' },
-  { table: 'stores', column: 'owner_id' },
-  { table: 'purchase_transactions', column: 'request_id' },
-] as const;
+const APPLICATION_SCHEMA_REQUIREMENTS: SchemaRequirements = {
+  tables: REQUIRED_SCHEMA,
+  uniqueKeys: [
+    ...INITIAL_SCHEMA_REQUIREMENTS.uniqueKeys,
+    { table: 'schema_migrations', column: 'version' },
+  ],
+};
+
+const SERVER_ONLY_REQUIREMENTS: SchemaRequirements = {
+  tables: {},
+  uniqueKeys: [],
+};
 
 export interface DatabaseReadiness {
   database: string;
@@ -157,7 +181,7 @@ export function readinessActions(readiness: DatabaseReadiness): string[] {
   }
   if (readiness.missingTables.length > 0) {
     actions.push(
-      'ローカル環境では npm run dev で未作成テーブルを追加してください。',
+      'DBをバックアップし、schema_migrations の履歴と実際のテーブルを確認してください。',
     );
   }
   if (
@@ -165,7 +189,7 @@ export function readinessActions(readiness: DatabaseReadiness): string[] {
     readiness.missingUniqueKeys.length > 0
   ) {
     actions.push(
-      '既存テーブルは自動変更しません。DBをバックアップし、不足項目用のスキーマ変更を作成・適用してください。',
+      'DBをバックアップし、schema_migrations の履歴と不足している列・一意制約を確認してください。',
     );
   }
   return actions;
@@ -176,6 +200,7 @@ export function evaluateDatabaseMetadata(
   server: ServerMetadata | undefined,
   columns: ColumnMetadata[],
   indexes: IndexMetadata[],
+  requirements: SchemaRequirements = APPLICATION_SCHEMA_REQUIREMENTS,
 ): DatabaseReadiness {
   const columnsByTable = new Map<string, Set<string>>();
   for (const column of columns) {
@@ -195,7 +220,7 @@ export function evaluateDatabaseMetadata(
 
   const missingTables: string[] = [];
   const missingColumns: string[] = [];
-  for (const [table, requiredColumns] of Object.entries(REQUIRED_SCHEMA)) {
+  for (const [table, requiredColumns] of Object.entries(requirements.tables)) {
     const present = columnsByTable.get(table);
     if (!present) {
       missingTables.push(table);
@@ -206,16 +231,18 @@ export function evaluateDatabaseMetadata(
     }
   }
 
-  const missingUniqueKeys = REQUIRED_UNIQUE_KEYS.filter(
-    ({ table, column }) =>
-      columnsByTable.has(table) &&
-      [...uniqueIndexes.entries()].every(
-        ([key, columnsInIndex]) =>
-          !key.startsWith(`${table}.`) ||
-          columnsInIndex.length !== 1 ||
-          columnsInIndex[0] !== column,
-      ),
-  ).map(({ table, column }) => `${table}.${column}`);
+  const missingUniqueKeys = requirements.uniqueKeys
+    .filter(
+      ({ table, column }) =>
+        columnsByTable.has(table) &&
+        [...uniqueIndexes.entries()].every(
+          ([key, columnsInIndex]) =>
+            !key.startsWith(`${table}.`) ||
+            columnsInIndex.length !== 1 ||
+            columnsInIndex[0] !== column,
+        ),
+    )
+    .map(({ table, column }) => `${table}.${column}`);
 
   const version = server?.version ?? 'unknown';
   const versionComment = server?.versionComment ?? '';
@@ -233,6 +260,7 @@ export function evaluateDatabaseMetadata(
 export async function inspectDatabaseReadiness(
   db: ReadinessQuery,
   expectedDatabase: string,
+  requirements: SchemaRequirements = APPLICATION_SCHEMA_REQUIREMENTS,
 ): Promise<DatabaseReadiness> {
   const [server] = await db.query<ServerMetadata>(
     'SELECT DATABASE() AS `database`, VERSION() AS version, @@version_comment AS versionComment',
@@ -251,15 +279,36 @@ export async function inspectDatabaseReadiness(
       ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
     [expectedDatabase],
   );
-  return evaluateDatabaseMetadata(expectedDatabase, server, columns, indexes);
+  return evaluateDatabaseMetadata(
+    expectedDatabase,
+    server,
+    columns,
+    indexes,
+    requirements,
+  );
 }
 
 export async function assertDatabaseReady(
-  db: Database,
+  db: ReadinessQuery,
   expectedDatabase: string,
 ): Promise<DatabaseReadiness> {
   const readiness = await inspectDatabaseReadiness(db, expectedDatabase);
   if (readinessProblems(readiness).length > 0) {
+    throw new DatabaseReadinessError(readiness);
+  }
+  return readiness;
+}
+
+export async function assertDatabaseServerSupported(
+  db: ReadinessQuery,
+  expectedDatabase: string,
+): Promise<DatabaseReadiness> {
+  const readiness = await inspectDatabaseReadiness(
+    db,
+    expectedDatabase,
+    SERVER_ONLY_REQUIREMENTS,
+  );
+  if (!readiness.versionSupported) {
     throw new DatabaseReadinessError(readiness);
   }
   return readiness;

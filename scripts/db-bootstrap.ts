@@ -8,8 +8,10 @@ import { createDatabase } from '../src/db.js';
 import { formatErrorForLog } from '../src/diagnostics.js';
 import {
   assertAdditiveSchemaSafe,
+  assertDatabaseReady,
   inspectDatabaseReadiness,
   type ReadinessQuery,
+  type SchemaRequirements,
 } from '../src/readiness.js';
 import { migrate } from './migrate.js';
 import { seedDemo } from './seed.js';
@@ -24,6 +26,10 @@ const SYSTEM_DATABASES = new Set([
   'performance_schema',
   'sys',
 ]);
+const SERVER_REQUIREMENTS: SchemaRequirements = {
+  tables: {},
+  uniqueKeys: [],
+};
 
 class BootstrapFailure extends Error {
   constructor(message: string) {
@@ -230,6 +236,7 @@ export async function provisionLocalDatabase(
     const readiness = await inspectDatabaseReadiness(
       readinessQuery(connection),
       config.dbDatabase,
+      SERVER_REQUIREMENTS,
     );
     assertAdditiveSchemaSafe(readiness);
 
@@ -295,6 +302,7 @@ async function run(): Promise<void> {
       }
       throw error;
     }
+    await assertDatabaseReady(db, config.dbDatabase);
     const seeded = await seedDemo(db, config.bcryptRounds);
     console.log(
       seeded ? '初期データを作成しました。' : '既存データを保持しました。',
