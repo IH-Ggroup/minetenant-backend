@@ -7,6 +7,10 @@ import { readConfig } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
 import { formatErrorForLog, supportsNodeVersion } from '../src/diagnostics.js';
 import {
+  inspectMigrationStatus,
+  migrations,
+} from '../src/db/migrations/index.js';
+import {
   DatabaseReadinessError,
   type DatabaseReadiness,
   inspectDatabaseReadiness,
@@ -55,6 +59,20 @@ export async function runDoctor(): Promise<number> {
   const db = createDatabase(config);
   try {
     const readiness = await inspectDatabaseReadiness(db, config.dbDatabase);
+    if (!readiness.versionSupported) {
+      console.error(formatDoctorReadinessFailure(readiness));
+      return 1;
+    }
+    const migrationStatus = await inspectMigrationStatus(db, migrations);
+    if (migrationStatus.pendingVersions.length > 0) {
+      console.error(
+        `DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING] 未適用のDB変更: ${migrationStatus.pendingVersions.join(', ')}`,
+      );
+      console.error(
+        '対処:\n- ローカル環境では npm run dev でversion順に適用してください。',
+      );
+      return 1;
+    }
     const problems = readinessProblems(readiness);
     if (problems.length > 0) {
       console.error(formatDoctorReadinessFailure(readiness));

@@ -174,10 +174,13 @@ describe('dependency-free development preflight', () => {
     expect(doctorNeedsBootstrap('DOCTOR_FAILED [ECONNREFUSED]')).toBe(false);
     expect(
       doctorNeedsSafeSetup('DOCTOR_FAILED [MINETENANT_SCHEMA_INCOMPLETE]'),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       doctorNeedsSafeSetup('DOCTOR_FAILED [MINETENANT_SCHEMA_MISMATCH]'),
     ).toBe(false);
+    expect(
+      doctorNeedsSafeSetup('DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING]'),
+    ).toBe(true);
   });
 
   it('recognizes the coded output produced by the real doctor formatter', () => {
@@ -191,7 +194,7 @@ describe('dependency-free development preflight', () => {
       missingUniqueKeys: [],
     });
     expect(output).toContain('[MINETENANT_SCHEMA_INCOMPLETE]');
-    expect(doctorNeedsSafeSetup(output)).toBe(true);
+    expect(doctorNeedsSafeSetup(output)).toBe(false);
   });
 
   it('runs bootstrap only for a missing local DB/user and re-runs doctor', async () => {
@@ -231,10 +234,11 @@ describe('dependency-free development preflight', () => {
     ]);
   });
 
-  it('adds only missing tables on a local incomplete schema and re-runs doctor', async () => {
+  it('applies pending migrations on a local database and re-runs doctor', async () => {
     const events = [];
+    const explanations = [];
     const doctorResults = [
-      result(1, 'DOCTOR_FAILED [MINETENANT_SCHEMA_INCOMPLETE]'),
+      result(1, 'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING]'),
       result(0, 'diagnosis ok'),
     ];
     await expect(
@@ -254,7 +258,10 @@ describe('dependency-free development preflight', () => {
           return result(0);
         },
         showDoctorResult: () => events.push('show-doctor'),
-        log: () => events.push('explain-setup'),
+        log: (message) => {
+          events.push('explain-setup');
+          explanations.push(message);
+        },
       }),
     ).resolves.toBe('set-up');
     expect(events).toEqual([
@@ -266,9 +273,12 @@ describe('dependency-free development preflight', () => {
       'doctor',
       'show-doctor',
     ]);
+    expect(explanations).toEqual([
+      '未適用マイグレーションを順番に適用します。既存データは保持します。',
+    ]);
   });
 
-  it('does not bootstrap remote, production or schema-mismatch targets', async () => {
+  it('does not prepare remote or production targets automatically', async () => {
     for (const scenario of [
       {
         settings: { appEnv: 'local', host: 'db.example.test', port: 3306 },
@@ -279,8 +289,12 @@ describe('dependency-free development preflight', () => {
         output: 'DOCTOR_FAILED [ER_ACCESS_DENIED_ERROR]',
       },
       {
-        settings: { appEnv: 'local', host: '127.0.0.1', port: 3306 },
-        output: 'DOCTOR_FAILED [MINETENANT_SCHEMA_MISMATCH]',
+        settings: { appEnv: 'local', host: 'db.example.test', port: 3306 },
+        output: 'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING]',
+      },
+      {
+        settings: { appEnv: 'production', host: '127.0.0.1', port: 3306 },
+        output: 'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING]',
       },
     ]) {
       let bootstrapped = false;

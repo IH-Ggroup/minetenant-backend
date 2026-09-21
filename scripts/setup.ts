@@ -3,10 +3,7 @@ import { config as loadEnv } from 'dotenv';
 import { readConfig } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
 import { formatErrorForLog } from '../src/diagnostics.js';
-import {
-  assertAdditiveSchemaSafe,
-  inspectDatabaseReadiness,
-} from '../src/readiness.js';
+import { assertDatabaseReady } from '../src/readiness.js';
 import { migrate } from './migrate.js';
 import { seedDemo } from './seed.js';
 
@@ -35,9 +32,8 @@ async function runSetup(): Promise<number> {
 
   const db = createDatabase(config);
   try {
-    const readiness = await inspectDatabaseReadiness(db, config.dbDatabase);
-    assertAdditiveSchemaSafe(readiness);
     await migrate(db);
+    await assertDatabaseReady(db, config.dbDatabase);
     const seeded = await seedDemo(db, config.bcryptRounds);
     console.log(
       seeded ? '初期データを作成しました。' : '既存データを保持しました。',

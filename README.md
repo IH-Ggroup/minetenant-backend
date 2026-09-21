@@ -27,7 +27,7 @@ npm run dev
 - MySQLの起動状態と接続先を確認
 - `npm run doctor`でDBと必須テーブルを診断
 - DBまたは接続用ユーザーが未作成の場合だけ、安全な初期DB準備を開始
-- テーブルだけが不足している場合は、既存部分を変えず不足テーブルを追加
+- 未適用のDB変更がある場合は、DB単位で直列化してversion順に1度だけ適用
 - 初期準備後にもう一度doctorを通してからHonoを起動
 
 初期DB準備が必要なときだけ、MySQL管理ユーザー（初期値は`root`）の
@@ -40,7 +40,8 @@ npm run dev
 初回に作る`.env`には、このclone専用のランダムなDBユーザー名とパスワードを生成します。
 そのため、PCに同名ユーザーが残っていても上書きせず、別cloneの接続も壊しません。
 DB・テーブル・既存データは上書きせず、既存の`.env`がある場合は内容を一切変更しません。
-既存DBの設定不一致やスキーマ不一致を検出した場合は、自動変更せず診断を表示して停止します。
+登録済みmigrationで解消できない設定不一致やスキーマ不一致は、
+勝手に修復せず診断を表示して停止します。
 
 MySQLの管理ユーザーが`root`以外の場合は、実行前に`MYSQL_ADMIN_USER`を設定します。
 CIなど対話入力できない環境だけ`MYSQL_ADMIN_PASSWORD`も設定できます。これらは`.env`へ保存しません。
@@ -51,7 +52,7 @@ MySQL本体のインストールやOSサービスの起動は自動化しませ�
 ### 既にDBを準備済みの場合
 
 既存環境や更新取り込み後も`npm run dev`だけです。既存の`.env`を上書きせず、
-接続・スキーマを診断してから起動します。不足テーブルだけなら安全に追加し、
+接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
 [疎通確認](http://localhost:8787/api/hello)が
@@ -73,8 +74,9 @@ Windows PowerShellでは`$env:PORT="8788"; npm run dev`です。
 | `ECONNREFUSED`                 | MySQL停止、またはhost・port違い          | MySQLを起動し、`.env`の`DB_HOST`・`DB_PORT`を確認     |
 | `ER_ACCESS_DENIED_ERROR`       | 接続用ユーザー未作成、または認証情報違い | 初回は`npm run dev`が自動準備。既存`.env`は設定を確認 |
 | `ER_BAD_DB_ERROR`              | `DB_DATABASE`のDBが未作成                | `npm run dev`がローカルDBを自動準備                   |
-| `MINETENANT_SCHEMA_INCOMPLETE` | 必須テーブルが未作成                     | `npm run dev`が不足テーブルを追加                     |
-| `MINETENANT_SCHEMA_MISMATCH`   | 既存テーブルの列・一意制約が不足         | DBをバックアップし、専用のスキーマ変更を適用          |
+| `MINETENANT_MIGRATION_PENDING` | 履歴にないDB変更がコードに登録済み       | ローカルでは`npm run dev`がversion順に適用            |
+| `MINETENANT_SCHEMA_INCOMPLETE` | 適用済み履歴に対して必須テーブルが不足   | DBをバックアップして履歴と実schemaを調査              |
+| `MINETENANT_SCHEMA_MISMATCH`   | 適用済み履歴に対して列・一意制約が不足   | DBをバックアップして履歴と実schemaを調査              |
 
 セットアップ、doctor、API起動はいずれも同じ診断を表示します。ドライバーの長いスタックトレースより先に、
 エラーコード・接続先・次のコマンドを確認してください。
@@ -122,6 +124,7 @@ src/
   server.ts       Node.jsの起動と終了
   config.ts       環境設定
   db.ts           MySQL接続とトランザクション
+  db/migrations/  番号順に1度だけ適用するDB変更
   auth.ts         セッション・CSRF・試行制限
   routes/         認証、商品・店舗、購入・取引・Minecraft
   services/       商品保存・購入・店舗成長・集計
@@ -129,6 +132,22 @@ src/
 scripts/          初期準備・テーブル作成・空DB専用デモデータ
 tests-ts/         実MySQLでのAPI・認証・並行購入テスト
 ```
+
+## マイグレーションの追加
+
+1. `src/db/migrations/` に、未使用のゼロ埋めversionを付けたファイルを追加します。
+2. `preflight`で前提を確認し、`up`を再実行可能に作り、`verify`で完了状態を確認します。
+3. 静的なmigration一覧と現行の必須schemaに追加します。v0要件と適用済みversionは変更しません。
+4. 空DB、既存DB、2回実行、途中失敗からの再実行を実MySQLテストに追加します。
+5. `npm run db:migrate` と検証コマンド一式を実行します。
+
+runnerは`up`・`verify`・履歴記録の全体を1つのtransactionでは囲みません。
+MySQLのDDLはステートメント単位で暗黙にcommitされるため、複数DDLをまたぐ自動rollbackや
+`down`は行わず、DMLだけの原子性が必要な処理は`up`内の`db.transaction()`で囲みます。
+`up`と`verify`の成功後だけversionを履歴へ記録し、失敗時は後続versionを実行しません。
+共有環境でschemaを変更する場合は、実行前にAPIの書き込みを停めてDBをバックアップします。
+失敗時は書き込みを停めたまま、エラー・DB状態・履歴を確認します。同じversionを
+再実行可能なままfix-forwardし、`npm run db:migrate`を再実行してください。
 
 ## 検証
 

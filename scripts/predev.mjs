@@ -177,7 +177,7 @@ export function doctorNeedsBootstrap(output) {
 }
 
 export function doctorNeedsSafeSetup(output) {
-  return /\[MINETENANT_SCHEMA_INCOMPLETE\]/.test(output);
+  return /\[MINETENANT_MIGRATION_PENDING\]/.test(output);
 }
 
 export function probeDatabasePort({ host, port }, timeoutMs = 2000) {
@@ -235,23 +235,21 @@ export async function prepareDatabaseForDevelopment({
   if (doctorNeedsSafeSetup(output)) {
     if (settings.appEnv !== 'local' || !isLocalDatabaseHost(settings.host)) {
       throw new PredevFailure(
-        '不足テーブルの自動作成は APP_ENV=local の localhost / 127.0.0.1 専用です。既存DBの接続設定を確認してください。',
+        '未適用マイグレーションの自動適用は APP_ENV=local の localhost / 127.0.0.1 専用です。既存DBの接続設定を確認してください。',
       );
     }
-    log(
-      '不足しているテーブルだけを追加します。既存テーブルと既存データは変更しません。',
-    );
+    log('未適用マイグレーションを順番に適用します。既存データは保持します。');
     const setup = await runSetup();
     if (!commandSucceeded(setup)) {
       throw new PredevFailure(
-        '不足テーブルの準備に失敗しました。上のメッセージを確認してください。',
+        '登録済みマイグレーションの適用に失敗しました。上のメッセージを確認してください。',
       );
     }
     const secondDoctor = await runDoctor();
     showDoctorResult(secondDoctor);
     if (!commandSucceeded(secondDoctor)) {
       throw new PredevFailure(
-        'テーブル準備後のdoctorに失敗しました。上のメッセージを確認してください。',
+        'マイグレーション適用後のdoctorに失敗しました。上のメッセージを確認してください。',
       );
     }
     return 'set-up';
