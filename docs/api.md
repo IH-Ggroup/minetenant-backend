@@ -4,12 +4,13 @@
 動作し、MySQLへデータを保存します。JSONのキーはフロントのTypeScript型に合わせて
 camelCaseで返します。
 
-> **B-CONTRACT-01の読み方**
+> **B-CONTRACT-01 / 02の読み方**
 > 「現行から確定契約への変更」と「一点物Product」から「Web購入」までの各節は、
-> B-PRODUCT / B-BUY Issueが実装する最終契約です。2026-09-16時点の`develop`
-> (`4c56615`)はまだ`stock`モデルなので、実装完了までは動作と異なります。それ以外の認証、店舗、
-> 取引履歴、Fabric APIの認証・pathは現行実装の説明であり、このIssueでは契約を変更しません。
-> ただし共有serializerが返すProductの形だけは、どのendpointでも本契約へ統一します。
+> B-PRODUCT / B-BUY / B-XP / B-BUILD Issueが実装する最終契約です。2026-09-19時点の`develop`
+> (`da99a9f`)はまだ`stock`モデルで、店舗pointsも販売店舗だけへ加算するため、実装完了までは
+> 動作と異なります。それ以外の認証、取引履歴、Fabric APIの認証・pathは現行実装の説明であり、
+> このIssueでは契約を変更しません。ただし共有serializerが返すProductの形、店舗の成長表示、
+> 出品・購入に伴う店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
 
 ## 現行から確定契約への変更
 
@@ -21,6 +22,8 @@ camelCaseで返します。
 | 出品の再送     | 毎回別Productを作成                            | 同じ利用者・ID・内容は同じProduct。異なる内容は409                      |
 | Web購入request | 2つのpathで`buyerId` / `source`も送信可能      | 正規pathは本文`requestId`だけ。互換pathは`productId` + `requestId`だけ  |
 | 購入時の状態   | `stock`を1減らす                               | `available`から`sold`へ一度だけ変更                                     |
+| 店舗points     | 販売店舗へ100 points                           | 出品店舗へ10、buyer店舗へ50、販売店舗へ100                              |
+| 店舗level      | 境界と表示計算が実装に直書き                   | 境界、最大Lv、最大到達後、表示値、丸めを共通契約として固定              |
 
 DB列、制約、index、`stock=0 / 1 / 2以上`の移行規則は
 [`docs/database.md`](./database.md)を正本とします。
@@ -69,6 +72,115 @@ B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
 `{ "message": "商品が見つかりません。" }`です。上表のエラーは`message`と`code`を必ず返し、
 `REQUEST_ID_CONFLICT`と`SELF_PURCHASE`には該当入力の`errors`も返します。
 
+## 店舗ポイント
+
+店舗pointsは次の操作が初回成功したときだけ加算します。購入元がWeb / Minecraftのどちらでも、
+加算対象とpointsは同じです。
+
+| 成功操作 | 加算対象                          | 加算points |
+| -------- | --------------------------------- | ---------: |
+| 新規出品 | Productのsellerが所有する店舗     |         10 |
+| 購入成立 | buyerが所有する店舗               |         50 |
+| 販売成立 | Productのsellerが所有する販売店舗 |        100 |
+
+上の値はWeb / Minecraftや実行環境によって変えない固定の契約値です。現行の
+`STORE_SALE_POINTS`は移行前の互換設定であり、確定契約の100 pointsを上書きする用途には使いません。
+
+新規出品の10 pointsは、`Asia/Tokyo`の暦日（00:00以上、翌日00:00未満）ごとに、各店舗で
+初回成功した新規Productの先着3件だけへ加算し、1日最大30 pointsです。4件目以降も出品自体は
+成功しますが、pointsは加算しません。日次判定にはProductの`created_at`を使い、DBへUTCで保存した
+時刻をJSTの半開区間へ対応させます。
+
+出品後にProductをsoft deleteしても、加算済みpointsは減算せず、その日の3件枠も戻しません。
+入力不正、競合、所有店舗なし、存在しない商品、自己購入、売り切れ、またはDB transactionの失敗など、
+操作が成立しなかった場合はpointsを加算せず、出品の日次件数にも数えません。
+
+出品・購入とも、同じ内容の同じ`requestId`を再送して既存のProductまたはTransactionを返す場合は、
+日付をまたいでもpointsを再加算しません。異なる内容への`requestId`再利用でも加算しません。
+Productの作成と出品pointsの加算、ならびにProductの`sold`化、Transactionの作成、buyer店舗への
+50 points、販売店舗への100 pointsは、それぞれ一つのDB transactionでcommitします。途中で
+失敗した場合は関連する変更をすべてrollbackし、片方の店舗だけへpointsを加算しません。
+
+### 店舗levelとAPI表示値
+
+`points`は0以上の整数で保持する累計値であり、level計算の正本です。最大Lvへ到達してもpointsの
+加算は続け、1,000で切り捨てません。`level`はpointsから導出して同じtransactionで保存する値で、
+クライアント入力やWeb / Minecraftのsourceによって変更しません。
+
+| level | 必要な累計points | そのlevelのpoints範囲 |
+| ----: | ---------------: | --------------------- |
+|     1 |                0 | 0〜99                 |
+|     2 |              100 | 100〜299              |
+|     3 |              300 | 300〜599              |
+|     4 |              600 | 600〜999              |
+|     5 |            1,000 | 1,000以上             |
+
+最大はLv5です。`level`は「必要な累計pointsが現在値以下である最大のlevel」とします。登録直後は
+`points: 0`、`level: 1`です。負数、少数、`NaN`、無限大をlevel計算へ渡して丸めてはいけません。
+これらはAPI入力ではなくprogramming errorまたはDB不整合として扱い、保存しません。保存済みの
+`points`と`level`が一致しない場合はpointsを正としてlevelを再計算します。
+
+B-XP-01の共通計算はpointsだけを入力とし、`Number.isSafeInteger(points) && points >= 0`を
+満たさない値には`RangeError`を送出します。文字列変換、切り捨て、0への丸めは行いません。
+GETはpointsから計算した値を返すだけでDBを更新せず、保存levelの修復はmigrationまたは次の
+正規なpoints更新transactionで行います。
+
+APIはフロントとMODが再計算しなくてよいよう、次の値を共通計算から返します。
+
+- `level`: 上表から求めた現在level
+- `points`: 上限で切り捨てない累計points
+- `nextLevelPoints`: 次のlevelまで「あと何pointsか」。最大Lvでは`0`
+- `levelProgressPercent`: 現在levelの区間内の進捗率。最大Lvでは`100`
+- `maxLevel`: この契約での最大level。常に`5`
+- `isMaxLevel`: 現在levelが最大なら`true`。それ以外は`false`
+
+最大Lv以外の進捗率は次の式を使い、小数点以下を切り捨てます。結果は`0〜99`です。
+
+```text
+floor((points - 現在levelの必要points) / (次levelの必要points - 現在levelの必要points) * 100)
+```
+
+`nextLevelPoints`は`次levelの必要points - points`です。最大Lvでは`level: 5`、`maxLevel: 5`、
+`nextLevelPoints: 0`、`levelProgressPercent: 100`、`isMaxLevel: true`を返します。クライアントは
+`nextLevelPoints: 0`や最大Lvの数値を独自に判定せず、`isMaxLevel`と`maxLevel`を使います。
+
+#### 境界値の手計算
+
+| points | level | nextLevelPoints | levelProgressPercent | isMaxLevel |
+| -----: | ----: | --------------: | -------------------: | :--------- |
+|      0 |     1 |             100 |                    0 | false      |
+|      1 |     1 |              99 |                    1 | false      |
+|     99 |     1 |               1 |                   99 | false      |
+|    100 |     2 |             200 |                    0 | false      |
+|    101 |     2 |             199 |                    0 | false      |
+|    299 |     2 |               1 |                   99 | false      |
+|    300 |     3 |             300 |                    0 | false      |
+|    301 |     3 |             299 |                    0 | false      |
+|    599 |     3 |               1 |                   99 | false      |
+|    600 |     4 |             400 |                    0 | false      |
+|    601 |     4 |             399 |                    0 | false      |
+|    999 |     4 |               1 |                   99 | false      |
+|  1,000 |     5 |               0 |                  100 | true       |
+|  1,001 |     5 |               0 |                  100 | true       |
+
+#### B-BUILD-03へ渡すlevel変更
+
+初回成功するpoints更新ごとに、対象Storeをlockした後の値を`oldPoints`、加算後を`newPoints`とし、
+それぞれから`oldLevel`と`newLevel`を計算します。複数店舗を更新する購入ではStoreごとに別々に
+計算します。`oldLevel < newLevel`の結果だけをB-BUILD-03へ渡し、points、level、原因となる
+ProductまたはTransaction、後続の建築jobを同じtransactionでcommitできるようにします。1回の加算で
+複数境界を越えた場合に作るjobの単位と状態遷移はB-CONTRACT-06を正本とします。
+
+同じ`requestId`の再送、入力不正、競合、rollbackでは新しいlevel変更結果を発生させません。
+最大Lv到達後はpointsだけが増え、`oldLevel`と`newLevel`はともに5なのでlevel変更なしです。
+
+ここでいう`level`、`oldLevel`、`newLevel`はpoints由来の論理的な成長levelで、Minecraftのworldへ
+適用済みの建築levelではありません。登録時点ですでに`level: 1`なので、初回Lv1建築を
+`oldLevel: 0`から`newLevel: 1`への成長として扱いません。建築済みlevelのfield名、Lv1建築、
+対応templateがあるtarget levelだけをjob化する規則、Lv1完了前にLv2をclaimしない順序は
+B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの受け渡し値であり、
+`StoreGrowth`の公開fieldには含めません。
+
 ## Webエンドポイント一覧
 
 ベースURLは`http://localhost:8787/api/v1`です。下表のパスを後ろにつなぎます。
@@ -89,6 +201,7 @@ B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
 | POST   | `/purchases`                      | 必須           | 本文に商品IDを指定して購入、201または200 `data: Transaction` |
 | POST   | `/products/{productId}/purchases` | 必須           | URLに商品IDを指定して購入、201または200 `data: Transaction`  |
 | GET    | `/stores/{storeId}`               | 不要           | 公開店舗情報、200 `data: Store`                              |
+| GET    | `/stores/{storeId}/growth`        | 不要           | 公開店舗成長情報、200 `data: StoreGrowth`                    |
 | GET    | `/stores/{storeId}/dashboard`     | 所有者のみ     | 店舗集計、200 `data: Dashboard`                              |
 | GET    | `/transactions`                   | 必須           | 本人の購入・販売履歴、200 `data: Transaction[]`              |
 | GET    | `/transactions/{transactionId}`   | 取引関係者のみ | 取引詳細、200 `data: Transaction`                            |
@@ -133,7 +246,7 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 72バイト以内です。`password_confirmation`は省略できますが、送る場合は一致が必要です。
 
 成功時はユーザーと、その人が所有する店舗を同時に作り、ログイン状態で
-`201 Created`と`data: User`を返します。店舗はレベル1・0ポイント・`offline`から
+`201 Created`と`data: User`を返します。店舗は`level: 1`、0 points、`offline`から
 始まります。登録ユーザーの`role`は`buyer`ですが、自分の店舗に出品できます。
 
 ### ログイン・状態復元・ログアウト
@@ -351,6 +464,9 @@ fingerprintへ含めません。DB上の保存形式と一意制約は
 現在値の`status: "sold"`です。同内容を同時送信してもProductは1行、201は1requestだけで、残りは
 すべて200です。
 
+初回の新規Product作成時だけ、[店舗ポイント](#店舗ポイント)の規則に従ってsellerの店舗へ
+10 pointsを加算します。同じ`requestId`の再送で200を返す場合は再加算しません。
+
 初回の201 responseです。
 
 ```json
@@ -514,6 +630,10 @@ amountを返します。その後に配送状態が進んでいれば、`status`
 Productの`sold`化とTransaction作成は一つのDB transactionでcommitします。成功後に同じ商品を
 GETするとIDや価格を保ったまま次の状態です。
 
+初回の購入成立時だけ、buyerが所有する店舗へ50 points、Productの販売店舗へ100 pointsを加算します。
+両店舗の加算はProductの`sold`化とTransaction作成と同じDB transactionで行い、片方でも更新できない
+場合は購入全体をrollbackします。
+
 ```json
 {
   "data": {
@@ -588,6 +708,7 @@ Dashboardの`products`にも共通の一点物Productを返します。集計fie
 
 ```http
 GET /api/v1/stores/store-mine
+GET /api/v1/stores/store-mine/growth
 GET /api/v1/stores/store-mine/dashboard
 ```
 
@@ -596,6 +717,7 @@ GET /api/v1/stores/store-mine/dashboard
 
 ダッシュボードでは、出品数、売り切れ数、販売数、売上、Web/Fabric別の購入数、
 次のレベルまでのポイント、最近の取引を返します。
+フロントとMinecraft MODはpointsからlevelや進捗率を再計算せず、APIの値をそのまま表示します。
 
 ```json
 {
@@ -634,7 +756,9 @@ GET /api/v1/stores/store-mine/dashboard
       "webSalesCount": 0,
       "minecraftSalesCount": 1,
       "nextLevelPoints": 180,
-      "levelProgressPercent": 40
+      "levelProgressPercent": 40,
+      "maxLevel": 5,
+      "isMaxLevel": false
     },
     "recentTransactions": [
       {
@@ -648,6 +772,40 @@ GET /api/v1/stores/store-mine/dashboard
         "createdAt": "2026-07-21T08:30:00.000000Z"
       }
     ]
+  }
+}
+```
+
+店舗成長だけを取得する`GET /api/v1/stores/{storeId}/growth`は、公開Storeですでに公開している
+`level`と`points`から作る読み取り専用の公開GETです。認証は不要で、呼び出してもpointsやlevelを
+変更しません。存在しないStoreには404を返します。Storeとdashboardも同じ共通計算を利用します。
+
+このpathは`storeId`を知っているWeb向けの公開GETです。接続中playerのMinecraft UUIDからStoreを
+解決するFabric Server向けpath・認証・未連携時のerrorは本Issueでは決めず、Minecraft連携・認証の
+契約Issueを正本とします。MODはowner限定dashboardを流用したり、UUID用pathを推測したりしません。
+
+```ts
+type StoreGrowth = {
+  storeId: string;
+  level: number;
+  points: number;
+  nextLevelPoints: number;
+  levelProgressPercent: number;
+  maxLevel: number;
+  isMaxLevel: boolean;
+};
+```
+
+```json
+{
+  "data": {
+    "storeId": "store-mine",
+    "level": 3,
+    "points": 420,
+    "nextLevelPoints": 180,
+    "levelProgressPercent": 40,
+    "maxLevel": 5,
+    "isMaxLevel": false
   }
 }
 ```
@@ -838,7 +996,7 @@ await api<void>('/auth/logout', { method: 'POST' });
 
 ## Fabric商品一覧
 
-以下のMinecraft専用APIは今回変更していません。Webのセッション認証・CSRF検証は
+以下のMinecraft専用APIの認証・pathは今回変更していません。Webのセッション認証・CSRF検証は
 適用されず、開発用の未認証APIです。responseの各商品は共有の一点物Productなので、`stock`ではなく
 `status`を返し、`status: "sold"`の商品は購入できません。Minecraft側の認証・最終pathは
 B-CONTRACT-05の範囲です。Web画面からはこちらを使わないでください。
@@ -864,5 +1022,7 @@ Content-Type: application/json
 }
 ```
 
-購入元はAPI側で`minecraft`に固定します。Web購入と同じ購入処理を通るため、
-同じ商品在庫・取引履歴・店舗ポイントが更新されます。
+購入元はAPI側で`minecraft`に固定します。Web購入と同じ購入処理を通るため、同じ商品状態と
+取引履歴を更新し、初回の購入成立時だけbuyerが所有する店舗へ50 points、Productの販売店舗へ
+100 pointsを加算します。同じ`requestId`の再送では再加算せず、途中で失敗した場合はすべて
+rollbackします。
