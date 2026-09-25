@@ -16,6 +16,7 @@ export const productThemes = [
 
 export type ProductCategory = (typeof productCategories)[number];
 export type ProductTheme = (typeof productThemes)[number];
+export type ProductStatus = 'available' | 'sold';
 export type PurchaseSource = 'web' | 'minecraft';
 export type Timestamp = string | Date | null;
 
@@ -51,10 +52,15 @@ export interface ProductRow {
   name: string;
   description: string;
   price: number;
+  /** @deprecated Remove after all readers and writers migrate in #93. */
   stock: number;
+  status: ProductStatus;
   category: ProductCategory;
   theme: ProductTheme;
   emoji: string;
+  listing_request_id: string | null;
+  listing_request_fingerprint: string | null;
+  deleted_at: Timestamp;
   created_at: Timestamp;
   updated_at?: Timestamp;
 }
@@ -78,6 +84,7 @@ export interface CreateProductInput {
   name: string;
   description: string;
   price: number;
+  /** @deprecated Dual-write in #52, then remove after the #93 cutover. */
   stock: number;
   category: ProductCategory;
   theme: ProductTheme;

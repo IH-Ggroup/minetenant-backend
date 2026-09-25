@@ -7,6 +7,11 @@ import bcrypt from 'bcryptjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '../scripts/migrate.js';
 import { seedDemo } from '../scripts/seed.js';
+import { PRODUCT_STATUS_TRIGGER_CONTRACTS } from '../src/db/product-status-trigger-contract.js';
+import {
+  assertDatabaseReady,
+  inspectDatabaseReadiness,
+} from '../src/readiness.js';
 import {
   assertTestDatabaseIsolation,
   createTestApp,
@@ -37,6 +42,10 @@ describe('safe migration and initial data setup', () => {
   async function clearDatabase() {
     // createTestApp verifies this is the dedicated test database before any mutation.
     await test.db.transaction(async (tx) => {
+      await tx.execute(`UPDATE products
+        SET listing_request_id = NULL, listing_request_fingerprint = NULL
+        WHERE listing_request_id IS NOT NULL
+           OR listing_request_fingerprint IS NOT NULL`);
       for (const table of [
         'hono_sessions',
         'hono_rate_limits',
@@ -70,7 +79,7 @@ describe('safe migration and initial data setup', () => {
     );
   }
 
-  it('preserves existing schemas, passwords, inventory, growth and history when rerun', async () => {
+  it('preserves existing schemas, passwords, product state, growth and history when rerun', async () => {
     const changedPassword = (
       await bcrypt.hash('user-changed-password', 4)
     ).replace('$2b$', '$2y$');
@@ -79,7 +88,7 @@ describe('safe migration and initial data setup', () => {
       [changedPassword],
     );
     await test.db.execute(
-      "UPDATE products SET stock = 37, price = 9100 WHERE product_id = 'product-stool'",
+      "UPDATE products SET price = 9100 WHERE product_id = 'product-stool'",
     );
     await test.db.execute(
       "UPDATE stores SET points = 1234, level = 5 WHERE store_id = 'store-mine'",
@@ -131,6 +140,62 @@ describe('safe migration and initial data setup', () => {
       status: 'shipping',
       amount: 4200,
     });
+    expect(
+      await test.db.query(
+        `SELECT product_id, status, stock, listing_request_id,
+                listing_request_fingerprint, deleted_at
+           FROM products ORDER BY product_id`,
+      ),
+    ).toEqual([
+      {
+        product_id: 'product-hoodie',
+        status: 'available',
+        stock: 1,
+        listing_request_id: null,
+        listing_request_fingerprint: null,
+        deleted_at: null,
+      },
+      {
+        product_id: 'product-lamp',
+        status: 'available',
+        stock: 1,
+        listing_request_id: null,
+        listing_request_fingerprint: null,
+        deleted_at: null,
+      },
+      {
+        product_id: 'product-notebook',
+        status: 'sold',
+        stock: 0,
+        listing_request_id: null,
+        listing_request_fingerprint: null,
+        deleted_at: null,
+      },
+      {
+        product_id: 'product-pendant',
+        status: 'available',
+        stock: 1,
+        listing_request_id: null,
+        listing_request_fingerprint: null,
+        deleted_at: null,
+      },
+      {
+        product_id: 'product-stool',
+        status: 'sold',
+        stock: 0,
+        listing_request_id: null,
+        listing_request_fingerprint: null,
+        deleted_at: null,
+      },
+      {
+        product_id: 'product-toolbag',
+        status: 'available',
+        stock: 1,
+        listing_request_id: null,
+        listing_request_fingerprint: null,
+        deleted_at: null,
+      },
+    ]);
   });
 
   it('keeps the database constraints that prevent lost history, invalid stock and duplicate purchases', async () => {
@@ -144,7 +209,11 @@ describe('safe migration and initial data setup', () => {
       test.db.execute(
         "UPDATE products SET stock = -1 WHERE product_id = 'product-hoodie'",
       ),
-    ).rejects.toMatchObject({ code: 'ER_WARN_DATA_OUT_OF_RANGE' });
+    ).rejects.toMatchObject({
+      code: expect.stringMatching(
+        /ER_(WARN_DATA_OUT_OF_RANGE|SIGNAL_EXCEPTION)/,
+      ),
+    });
     await expect(
       test.db.execute(`INSERT INTO purchase_transactions
             (transaction_id, request_id, product_id, buyer_user_id, seller_user_id, source, amount, status)
@@ -160,6 +229,168 @@ describe('safe migration and initial data setup', () => {
             VALUES ('duplicate-store', 'user-buyer', 'Duplicate store', '')`),
     ).rejects.toMatchObject({ code: 'ER_DUP_ENTRY' });
     expect(await snapshot()).toEqual(before);
+  });
+
+  it.each([
+    [
+      'product price',
+      "UPDATE products SET price = 0 WHERE product_id = 'product-hoodie'",
+    ],
+    [
+      'product category',
+      "UPDATE products SET category = 'unknown' WHERE product_id = 'product-hoodie'",
+    ],
+    [
+      'product theme',
+      "UPDATE products SET theme = 'unknown' WHERE product_id = 'product-hoodie'",
+    ],
+    [
+      'transaction buyer and seller identity',
+      `UPDATE purchase_transactions
+          SET buyer_user_id = seller_user_id
+        WHERE transaction_id = 'transaction-demo'`,
+    ],
+    [
+      'transaction source',
+      `UPDATE purchase_transactions SET source = 'legacy'
+        WHERE transaction_id = 'transaction-demo'`,
+    ],
+    [
+      'transaction status',
+      `UPDATE purchase_transactions SET status = 'unknown'
+        WHERE transaction_id = 'transaction-demo'`,
+    ],
+    [
+      'transaction amount',
+      `UPDATE purchase_transactions SET amount = 0
+        WHERE transaction_id = 'transaction-demo'`,
+    ],
+  ] as const)(
+    'enforces the %s CHECK in the migrated schema',
+    async (_name, sql) => {
+      await expect(test.db.execute(sql)).rejects.toMatchObject({
+        code: 'ER_CHECK_CONSTRAINT_VIOLATED',
+      });
+    },
+  );
+
+  it('rejects startup readiness when a compatibility trigger is missing or modified', async () => {
+    const trigger = PRODUCT_STATUS_TRIGGER_CONTRACTS.find(
+      ({ event }) => event === 'UPDATE',
+    )!;
+    const createTrigger = (statement: string) =>
+      test.db.execute(
+        `CREATE TRIGGER \`${trigger.name}\` ${trigger.timing} ${trigger.event}
+         ON \`${trigger.table}\` FOR EACH ROW ${statement}`,
+      );
+
+    await test.db.execute(`DROP TRIGGER \`${trigger.name}\``);
+    try {
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+
+      await createTrigger('BEGIN SET NEW.name = NEW.name; END');
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+    } finally {
+      await test.db.execute(`DROP TRIGGER IF EXISTS \`${trigger.name}\``);
+      await createTrigger(trigger.statement);
+    }
+
+    await expect(
+      assertDatabaseReady(test.db, test.config.dbDatabase),
+    ).resolves.toMatchObject({ invalidTriggers: [] });
+
+    await test.db.execute(`CREATE TRIGGER hono_test_unexpected_products_trigger
+      AFTER UPDATE ON products FOR EACH ROW SET @product_changed = 1`);
+    try {
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+    } finally {
+      await test.db.execute(
+        'DROP TRIGGER hono_test_unexpected_products_trigger',
+      );
+    }
+
+    await expect(
+      assertDatabaseReady(test.db, test.config.dbDatabase),
+    ).resolves.toMatchObject({ invalidTriggers: [] });
+  });
+
+  it('rejects startup readiness while a persistent migration audit table is missing', async () => {
+    const auditTable = 'product_status_migration_product_audit';
+    const temporarilyRenamedTable =
+      'product_status_migration_product_audit_readiness_test';
+
+    await test.db.execute(
+      `RENAME TABLE ${auditTable} TO ${temporarilyRenamedTable}`,
+    );
+    try {
+      const readiness = await inspectDatabaseReadiness(
+        test.db,
+        test.config.dbDatabase,
+      );
+      expect(readiness.missingTables).toContain(auditTable);
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({
+        code: 'MINETENANT_SCHEMA_MISMATCH',
+      });
+    } finally {
+      await test.db.execute(
+        `RENAME TABLE ${temporarilyRenamedTable} TO ${auditTable}`,
+      );
+    }
+
+    await expect(
+      assertDatabaseReady(test.db, test.config.dbDatabase),
+    ).resolves.toMatchObject({ missingTables: [] });
+  });
+
+  it('rejects cascading foreign keys and triggers added to persistent audit tables', async () => {
+    const auditTable = 'product_status_migration_product_audit';
+    const foreignKey = 'readiness_test_audit_product_foreign';
+    const trigger = 'readiness_test_audit_delete_trigger';
+
+    await test.db.execute(`ALTER TABLE ${auditTable}
+      ADD CONSTRAINT ${foreignKey} FOREIGN KEY (product_id)
+      REFERENCES products(product_id) ON DELETE CASCADE ON UPDATE RESTRICT`);
+    try {
+      const readiness = await inspectDatabaseReadiness(
+        test.db,
+        test.config.dbDatabase,
+      );
+      expect(readiness.invalidTables).toContain(auditTable);
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+    } finally {
+      await test.db.execute(
+        `ALTER TABLE ${auditTable} DROP FOREIGN KEY ${foreignKey}`,
+      );
+    }
+
+    await test.db.execute(`CREATE TRIGGER ${trigger}
+      BEFORE DELETE ON ${auditTable} FOR EACH ROW SET @audit_deleted = 1`);
+    try {
+      const readiness = await inspectDatabaseReadiness(
+        test.db,
+        test.config.dbDatabase,
+      );
+      expect(readiness.invalidTables).toContain(auditTable);
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+    } finally {
+      await test.db.execute(`DROP TRIGGER ${trigger}`);
+    }
+
+    await expect(
+      assertDatabaseReady(test.db, test.config.dbDatabase),
+    ).resolves.toMatchObject({ invalidTables: [] });
   });
 
   it('rolls back the whole seed if its last transaction insert fails, then permits a clean retry', async () => {
@@ -181,6 +412,20 @@ describe('safe migration and initial data setup', () => {
 });
 
 describe('setup command boundaries', () => {
+  it('enables local trigger creation in the manual administrator SQL without granting SUPER', async () => {
+    const setupSql = await readFile(
+      fileURLToPath(new URL('../database/setup-local.sql', import.meta.url)),
+      'utf8',
+    );
+    expect(setupSql).toContain(
+      'SET GLOBAL log_bin_trust_function_creators = 1;',
+    );
+    expect(setupSql).not.toMatch(/GRANT\s+SUPER\b/i);
+    expect(setupSql.indexOf('SET GLOBAL')).toBeLessThan(
+      setupSql.indexOf('CREATE DATABASE'),
+    );
+  });
+
   it('refuses to reset the configured development database', () => {
     expect(() =>
       assertTestDatabaseIsolation({ DB_DATABASE: 'MineTenant_Test' }),

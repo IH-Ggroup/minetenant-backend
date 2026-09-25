@@ -14,6 +14,10 @@ const BOOTSTRAP_DIAGNOSTIC_CODES = new Set([
   'ER_DBACCESS_DENIED_ERROR',
   'ER_BAD_DB_ERROR',
 ]);
+// These migrations need a narrowly scoped MySQL administrator preparation
+// before the application account can apply them. Keep the list explicit so
+// ordinary additive migrations continue to use the non-admin setup path.
+const ADMIN_PREPARED_MIGRATIONS = new Set(['0002_product_status']);
 const DEPENDENCY_SENTINEL = '.minetenant-package-lock.sha256';
 
 export class PredevFailure extends Error {
@@ -180,6 +184,23 @@ export function doctorNeedsSafeSetup(output) {
   return /\[MINETENANT_MIGRATION_PENDING\]/.test(output);
 }
 
+export function doctorNeedsAdminPreparedMigration(output) {
+  const pendingLine = output
+    .split(/\r?\n/)
+    .find((line) => line.includes('[MINETENANT_MIGRATION_PENDING]'));
+  const pendingVersions = new Set(
+    pendingLine
+      ?.slice(pendingLine.indexOf(']') + 1)
+      .match(/\b\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\b/g) ?? [],
+  );
+  return (
+    pendingLine !== undefined &&
+    [...ADMIN_PREPARED_MIGRATIONS].some((version) =>
+      pendingVersions.has(version),
+    )
+  );
+}
+
 export function probeDatabasePort({ host, port }, timeoutMs = 2000) {
   return new Promise((resolveProbe, rejectProbe) => {
     const socket = net.createConnection({ host, port });
@@ -223,7 +244,7 @@ export async function prepareDatabaseForDevelopment({
     await probe(settings);
   } catch {
     throw new PredevFailure(
-      `MySQL ${settings.host}:${settings.port} に接続できません。MySQL 8.0以上を起動してから npm run dev をもう一度実行してください。`,
+      `MySQL ${settings.host}:${settings.port} に接続できません。MySQL 8.0.17以上を起動してから npm run dev をもう一度実行してください。`,
     );
   }
 
@@ -238,11 +259,20 @@ export async function prepareDatabaseForDevelopment({
         '未適用マイグレーションの自動適用は APP_ENV=local の localhost / 127.0.0.1 専用です。既存DBの接続設定を確認してください。',
       );
     }
-    log('未適用マイグレーションを順番に適用します。既存データは保持します。');
-    const setup = await runSetup();
-    if (!commandSucceeded(setup)) {
+    const needsAdministrator = doctorNeedsAdminPreparedMigration(output);
+    log(
+      needsAdministrator
+        ? 'triggerを追加する未適用マイグレーションを安全に適用します。管理者設定を確認し、既存データと接続用ユーザーのパスワードは保持します。'
+        : '未適用マイグレーションを順番に適用します。既存データは保持します。',
+    );
+    const migrationSetup = needsAdministrator
+      ? await runBootstrap()
+      : await runSetup();
+    if (!commandSucceeded(migrationSetup)) {
       throw new PredevFailure(
-        '登録済みマイグレーションの適用に失敗しました。上のメッセージを確認してください。',
+        needsAdministrator
+          ? 'trigger作成の管理者準備または登録済みマイグレーションの適用に失敗しました。上のメッセージを確認してください。'
+          : '登録済みマイグレーションの適用に失敗しました。上のメッセージを確認してください。',
       );
     }
     const secondDoctor = await runDoctor();
@@ -252,7 +282,7 @@ export async function prepareDatabaseForDevelopment({
         'マイグレーション適用後のdoctorに失敗しました。上のメッセージを確認してください。',
       );
     }
-    return 'set-up';
+    return needsAdministrator ? 'migration-bootstrapped' : 'set-up';
   }
 
   if (!doctorNeedsBootstrap(output)) {

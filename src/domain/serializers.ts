@@ -27,7 +27,7 @@ export function serializeProduct(product: ProductRow) {
     name: product.name,
     description: product.description,
     price: Number(product.price),
-    stock: Number(product.stock),
+    status: product.status,
     category: product.category,
     theme: product.theme,
     emoji: product.emoji,

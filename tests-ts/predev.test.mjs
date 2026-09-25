@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { formatDoctorReadinessFailure } from '../scripts/doctor.ts';
 import {
+  doctorNeedsAdminPreparedMigration,
   doctorNeedsBootstrap,
   doctorNeedsSafeSetup,
   envWithUniqueDatabaseCredentials,
@@ -181,6 +182,26 @@ describe('dependency-free development preflight', () => {
     expect(
       doctorNeedsSafeSetup('DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING]'),
     ).toBe(true);
+    expect(
+      doctorNeedsAdminPreparedMigration(
+        'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING] 未適用のDB変更: 0002_product_status',
+      ),
+    ).toBe(true);
+    expect(
+      doctorNeedsAdminPreparedMigration(
+        'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING] 未適用のDB変更: 0003_future_change',
+      ),
+    ).toBe(false);
+    expect(
+      doctorNeedsAdminPreparedMigration(
+        'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING] 未適用のDB変更: 0002_product_status_extra',
+      ),
+    ).toBe(false);
+    expect(
+      doctorNeedsAdminPreparedMigration(
+        'DOCTOR_FAILED [MINETENANT_SCHEMA_MISMATCH] 0002_product_status',
+      ),
+    ).toBe(false);
   });
 
   it('recognizes the coded output produced by the real doctor formatter', () => {
@@ -192,9 +213,35 @@ describe('dependency-free development preflight', () => {
       missingTables: ['hono_sessions'],
       missingColumns: [],
       missingUniqueKeys: [],
+      invalidTables: [],
+      invalidTriggers: [],
     });
     expect(output).toContain('[MINETENANT_SCHEMA_INCOMPLETE]');
     expect(doctorNeedsSafeSetup(output)).toBe(false);
+  });
+
+  it('leaves an already-ready database untouched on later development starts', async () => {
+    const events = [];
+    await expect(
+      prepareDatabaseForDevelopment({
+        settings: { appEnv: 'local', host: '127.0.0.1', port: 3306 },
+        probe: async () => events.push('probe'),
+        runDoctor: async () => {
+          events.push('doctor');
+          return result(0, 'diagnosis ok');
+        },
+        runBootstrap: async () => {
+          events.push('unexpected-bootstrap');
+          return result(0);
+        },
+        runSetup: async () => {
+          events.push('unexpected-setup');
+          return result(0);
+        },
+        showDoctorResult: () => events.push('show-doctor'),
+      }),
+    ).resolves.toBe('ready');
+    expect(events).toEqual(['probe', 'doctor', 'show-doctor']);
   });
 
   it('runs bootstrap only for a missing local DB/user and re-runs doctor', async () => {
@@ -276,6 +323,78 @@ describe('dependency-free development preflight', () => {
     expect(explanations).toEqual([
       '未適用マイグレーションを順番に適用します。既存データは保持します。',
     ]);
+  });
+
+  it('uses administrator preparation for a pending trigger migration without running the ordinary setup path', async () => {
+    const events = [];
+    const explanations = [];
+    const doctorResults = [
+      result(
+        1,
+        'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING] 未適用のDB変更: 0002_product_status',
+      ),
+      result(0, 'diagnosis ok'),
+    ];
+    await expect(
+      prepareDatabaseForDevelopment({
+        settings: { appEnv: 'local', host: '127.0.0.1', port: 3306 },
+        probe: async () => events.push('probe'),
+        runDoctor: async () => {
+          events.push('doctor');
+          return doctorResults.shift();
+        },
+        runBootstrap: async () => {
+          events.push('bootstrap-existing');
+          return result(0);
+        },
+        runSetup: async () => {
+          events.push('unexpected-setup');
+          return result(0);
+        },
+        showDoctorResult: () => events.push('show-doctor'),
+        log: (message) => {
+          events.push('explain-admin-migration');
+          explanations.push(message);
+        },
+      }),
+    ).resolves.toBe('migration-bootstrapped');
+    expect(events).toEqual([
+      'probe',
+      'doctor',
+      'show-doctor',
+      'explain-admin-migration',
+      'bootstrap-existing',
+      'doctor',
+      'show-doctor',
+    ]);
+    expect(explanations).toEqual([
+      'triggerを追加する未適用マイグレーションを安全に適用します。管理者設定を確認し、既存データと接続用ユーザーのパスワードは保持します。',
+    ]);
+  });
+
+  it('keeps trigger-migration bootstrap failures visible instead of falling back to app-user setup', async () => {
+    let ordinarySetupRan = false;
+    await expect(
+      prepareDatabaseForDevelopment({
+        settings: { appEnv: 'local', host: 'localhost', port: 3306 },
+        probe: async () => {},
+        runDoctor: async () =>
+          result(
+            1,
+            'DOCTOR_FAILED [MINETENANT_MIGRATION_PENDING] 未適用のDB変更: 0002_product_status',
+          ),
+        runBootstrap: async () =>
+          result(
+            1,
+            'DB_BOOTSTRAP_FAILED SYSTEM_VARIABLES_ADMIN権限が必要です。',
+          ),
+        runSetup: async () => {
+          ordinarySetupRan = true;
+          return result(0);
+        },
+      }),
+    ).rejects.toThrow('trigger作成の管理者準備');
+    expect(ordinarySetupRan).toBe(false);
   });
 
   it('does not prepare remote or production targets automatically', async () => {

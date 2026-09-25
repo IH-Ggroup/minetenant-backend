@@ -198,8 +198,8 @@ deadlockを避けます。
 | `category`                    | `VARCHAR(32)`                                        | 不可 | なし        | APIのallowlist値                      |
 | `theme`                       | `VARCHAR(32)`                                        | 不可 | なし        | APIのallowlist値                      |
 | `emoji`                       | `VARCHAR(32)`                                        | 不可 | なし        | API入力は1〜16 code point             |
-| `listing_request_id`          | `VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin` | 可   | `NULL`      | 出品の冪等key。NULLは移行前の商品だけ |
-| `listing_request_fingerprint` | `CHAR(64) CHARACTER SET ascii COLLATE ascii_bin`     | 可   | `NULL`      | 正規化した出品内容のSHA-256           |
+| `listing_request_id`          | `VARCHAR(101) CHARACTER SET ascii COLLATE ascii_bin` | 可   | `NULL`      | 出品の冪等key。NULLは移行前の商品だけ |
+| `listing_request_fingerprint` | `VARCHAR(65) CHARACTER SET ascii COLLATE ascii_bin`  | 可   | `NULL`      | 正規化した出品内容のSHA-256           |
 | `deleted_at`                  | `TIMESTAMP(6)`                                       | 可   | `NULL`      | soft delete時刻                       |
 | `created_at`                  | `TIMESTAMP`                                          | 可   | `NULL`      | 現行互換の作成日時                    |
 | `updated_at`                  | `TIMESTAMP`                                          | 可   | `NULL`      | 現行互換の更新日時                    |
@@ -224,14 +224,23 @@ deadlockを避けます。
 - `CHECK (price BETWEEN 1 AND 99999999)`
 - `CHECK (BINARY category IN ('fashion','interior','hobby','accessory','tool'))`
 - `CHECK (BINARY theme IN ('ocean','forest','amethyst','sunset','sand','moss'))`
-- `CHECK (listing_request_id IS NULL OR listing_request_id REGEXP '^[A-Za-z0-9._:-]{1,100}$')`
-- `CHECK (listing_request_fingerprint IS NULL OR listing_request_fingerprint REGEXP '^[0-9a-f]{64}$')`
+- `CHECK (listing_request_id IS NULL OR listing_request_id REGEXP CONVERT(0x5c415b412d5a612d7a302d392e5f3a2d5d7b312c3130307d5c7a USING utf8mb4) COLLATE utf8mb4_0900_bin)`
+  （hex値は絶対anchor付きの`\A[A-Za-z0-9._:-]{1,100}\z`）
+- `CHECK (listing_request_fingerprint IS NULL OR listing_request_fingerprint REGEXP CONVERT(0x5c415b302d39612d665d7b36347d5c7a USING utf8mb4) COLLATE utf8mb4_0900_bin)`
+  （hex値は絶対anchor付きの`\A[0-9a-f]{64}\z`）
 - `CHECK ((listing_request_id IS NULL AND listing_request_fingerprint IS NULL) OR
 (listing_request_id IS NOT NULL AND listing_request_fingerprint IS NOT NULL))`
 - `CHECK (deleted_at IS NULL OR BINARY status = 'available')`。売却済み商品は削除できない
 
 MySQLではUNIQUE列のNULLを複数許すため、既存商品は出品request IDを捏造せず両列NULLのまま保持
 できます。新規出品ではapplicationが両列を必須にします。
+`listing_request_id`の`VARCHAR(101)`と`listing_request_fingerprint`の`VARCHAR(65)`は、上限を増やす
+ためではなく検証用の1文字分です。上限と同じ幅では非strict設定や末尾制御文字の扱いにより余分な
+1文字がCHECK前に切り捨てられる可能性があるため、余分な1文字をDBへ到達させ、上記の完全一致CHECKで
+必ず拒否します。applicationが受け付ける上限はそれぞれ100文字と64文字のままです。
+regexはSQL文字列literalでなくhexから変換し、sessionの`NO_BACKSLASH_ESCAPES`設定にかかわらず
+ICUへ同じbackslashと絶対anchorを渡します。patternにもbinary collationを明示し、fingerprintの
+lowercase hex契約をcase-sensitiveに検査します。
 
 ### 出品fingerprint
 
@@ -352,16 +361,35 @@ WebとMinecraftが別の`request_id`で同時購入しても、商品行lockと`
 migration開始前に、商品出品・削除とWeb / Minecraft購入を受ける全API processを停止します。
 backfill、互換trigger追加、検証のcommitが完了するまで再開しません。その状態で最低限次を記録します。
 
+MySQLでbinary logが有効な場合は、migration実行前にDB管理者が
+`log_bin_trust_function_creators=1`を有効にし、実行ユーザーへ対象schemaの`TRIGGER`権限を付与します。
+アプリ接続用ユーザーへ`SUPER`権限は付与しません。ローカル開発では`npm run db:bootstrap`が管理接続で
+この設定を行い、migration自身も列追加より前に設定と権限を検査します。
+
 - `stock=0`、`stock=1`、`stock>=2`の件数とProduct ID。`stock>=2`は変換監査用に旧数量も記録する
 - ProductごとのTransaction件数
 - Transactionありかつ`stock>0`の行
 - 同じProductにTransactionが2件以上ある行
 - Transactionの`seller_user_id`が参照先Productの`user_id`と異なる行
 - 存在しないstore、seller、productを参照する行
-- 100文字超過または`[A-Za-z0-9._:-]`以外を含む購入`request_id`。grandfather再送テスト用の監査一覧
+- 1〜100文字の範囲外、または`[A-Za-z0-9._:-]`以外を含む購入`request_id`。grandfather再送テスト用の監査一覧
 - buyerとsellerが同じTransaction、範囲外amount、`web` / `minecraft`以外のsource、
   `paid` / `shipping` / `complete`以外のTransaction status
 - 範囲外price、allowlist外category / themeなど、目標CHECKに違反するProduct
+
+移行で旧数量を上書きする前に、`product_status_migration_product_audit`へ全Productの
+`product_id`、旧`stock`、関連Transaction ID、Transactionありかつ`stock>0`だったかを保存します。
+最終形式外の購入request IDは`product_status_migration_request_audit`へTransaction ID、UTF-8値の
+SHA-256、文字数、長さ・文字種の違反flagだけを保存します。request ID本体は既存Transactionに残るため
+監査tableへ複製せず、個人情報と冪等keyの露出を最小化します。両監査tableに業務tableへの外部キーは
+付けず、移行後に業務行が削除されても記録を保持します。監査行の保存とbackfillは同じDML transactionで
+commitし、失敗時は両方をrollbackします。
+長さflag `violates_current_length_limit`は空文字または101文字以上だけ、文字種flag
+`contains_noncanonical_character`は長さと独立してallowlist外文字を含む場合だけを示します。
+再実行時に非空のProductで`status`が全件設定済みなら、両監査tableと全行の完全な監査coverageを
+preflightで必須にします。旧`stock`と関連Transactionから再計算した現在の`status` / `stock`まで一致しない
+状態では、現在値から旧数量を推測せず中断します。Productが0件の場合と、全`status`がNULLで旧`stock`が
+残る正常なexpand途中だけは、まだ監査tableがなくても後続の同一DML transactionで安全にcaptureできます。
 
 同じProductにTransactionが2件以上ある場合は、どの購入を正とするか自動判定せずmigrationを中断
 します。購入`request_id`以外の目標制約違反も、値を自動変更せず対象IDと違反理由を出力して変更前に
@@ -434,6 +462,9 @@ CHECKは行いません。WebとMinecraftの全writerは新規IDだけを未加�
 - 目標CHECKに違反するProduct / Transactionが0件。購入`request_id`はDB CHECK対象外
 - 段階移行中に`stock`を残す場合、`available=1`、`sold=0`が全件で一致する
 - 外部キー孤児が0件
+- `product_status_migration_product_audit`が全移行前Productを旧`stock`・関連Transaction・anomaly flagと
+  ともに保持し、`product_status_migration_request_audit`が最終形式外request IDのTransaction ID・hash・
+  文字数・違反flagを漏れなく保持する
 
 ### 5. B-PRODUCT-CUTOVER
 
@@ -441,6 +472,8 @@ CHECKは行いません。WebとMinecraftの全writerは新規IDだけを未加�
 backfillの検証後に有効にします。`status NOT NULL DEFAULT 'available'`、互換trigger / 物理`stock`と
 deprecatedな内部fieldの削除は
 [B-PRODUCT-CUTOVER (#93)](https://github.com/IH-Ggroup/minetenant-backend/issues/93)だけが行います。
+2つの`product_status_migration_*_audit` tableは数量集約とgrandfather判定の追跡記録なので、cutoverや
+通常の業務data削除に連動させません。保存期間を定めた別の監査data lifecycle Issueなしに削除しません。
 
 B-PRODUCT-CUTOVERの前提は、B-PRODUCT-02〜05、B-BUY-01 / 02、B-MC-CATALOG-COMPAT-01、
 B-MC-BUY-01の全reader / writerが本契約へ移行済みで、

@@ -86,7 +86,8 @@ export function databaseDiagnostic(
     case 'MINETENANT_SCHEMA_MISMATCH':
       return {
         code,
-        summary: '既存テーブルの列または一意制約がAPIの要件と一致しません。',
+        summary:
+          '永続監査table・列・一意制約またはtriggerがAPIの要件と一致しません。',
         action:
           'DBをバックアップし、npm run doctor の結果と schema_migrations の履歴を確認してください。',
       };
@@ -103,11 +104,19 @@ export function databaseDiagnostic(
         action:
           '書き込みを停止したままDBをバックアップし、列・制約・孤児行を確認してからfix-forwardしてください。',
       };
+    case 'MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE':
+      return {
+        code,
+        summary: '商品状態の移行を安全に続行できないDB状態です。',
+        action:
+          '書き込みを停止したままDBをバックアップしてください。ローカル環境は npm run db:bootstrap を実行し、それ以外はデータ不整合・TRIGGER権限・log_bin_trust_function_creators をDB管理者と確認してからfix-forwardしてください。',
+      };
     case 'MINETENANT_DATABASE_UNSUPPORTED':
       return {
         code,
         summary: '対応していないデータベースサーバーです。',
-        action: 'MySQL 8.0以上を使用し、npm run doctor を再実行してください。',
+        action:
+          'MySQL 8.0.17以上を使用し、npm run doctor を再実行してください。',
       };
     case 'EADDRINUSE':
       return {
