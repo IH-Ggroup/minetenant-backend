@@ -11,11 +11,11 @@ export async function getStoreDashboard(db: Database, store: StoreRow) {
   const [products, transactions] = await Promise.all([
     db.query<ProductRow>(
       'SELECT * FROM products WHERE store_id = ? ORDER BY created_at DESC',
-      [store.id],
+      [store.store_id],
     ),
     db.query<TransactionRow>(
-      'SELECT * FROM purchase_transactions WHERE seller_id = ? ORDER BY created_at DESC',
-      [store.owner_id],
+      'SELECT * FROM purchase_transactions WHERE seller_user_id = ? ORDER BY created_at DESC',
+      [store.user_id],
     ),
   ]);
   return {

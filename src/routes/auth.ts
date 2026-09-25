@@ -93,16 +93,16 @@ export function createAuthRoutes(
       typeof body.email === 'string' ? body.email.trim().toLowerCase() : '',
     );
     const { name, email, password } = credentials(body, true);
-    const [existing] = await db.query<{ id: string }>(
-      'SELECT id FROM users WHERE email = ? LIMIT 1',
+    const [existing] = await db.query<{ user_id: string }>(
+      'SELECT user_id FROM users WHERE email = ? LIMIT 1',
       [email],
     );
     if (existing) throw duplicateEmail();
     const passwordHash = await bcrypt.hash(password, config.bcryptRounds);
-    const id = randomUUID();
+    const userId = randomUUID();
     const storeId = randomUUID();
     const user: UserRow = {
-      id,
+      user_id: userId,
       name,
       email,
       password: passwordHash,
@@ -114,10 +114,10 @@ export function createAuthRoutes(
     try {
       await db.transaction(async (tx) => {
         await tx.execute(
-          `INSERT INTO users (id, name, email, password, role, role_label, avatar_initial, created_at, updated_at)
+          `INSERT INTO users (user_id, name, email, password, role, role_label, avatar_initial, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
           [
-            id,
+            userId,
             name,
             email,
             passwordHash,
@@ -127,9 +127,9 @@ export function createAuthRoutes(
           ],
         );
         await tx.execute(
-          `INSERT INTO stores (id, owner_id, name, description, level, points, sync_status, created_at, updated_at)
+          `INSERT INTO stores (store_id, user_id, name, description, level, points, sync_status, created_at, updated_at)
            VALUES (?, ?, ?, '', 1, 0, 'offline', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          [storeId, id, `${name}の店舗`],
+          [storeId, userId, `${name}の店舗`],
         );
       });
     } catch (error) {
@@ -139,15 +139,15 @@ export function createAuthRoutes(
         'code' in error &&
         error.code === 'ER_DUP_ENTRY'
       ) {
-        const [competing] = await db.query<{ id: string }>(
-          'SELECT id FROM users WHERE email = ? LIMIT 1',
+        const [competing] = await db.query<{ user_id: string }>(
+          'SELECT user_id FROM users WHERE email = ? LIMIT 1',
           [email],
         );
         if (competing) throw duplicateEmail();
       }
       throw error;
     }
-    await rotateSession(c, db, config, id);
+    await rotateSession(c, db, config, userId);
     c.set('user', user);
     return c.json({ data: serializeUser(user) }, 201);
   });
@@ -161,7 +161,7 @@ export function createAuthRoutes(
     );
     const { email, password } = credentials(body, false);
     const [user] = await db.query<UserRow>(
-      'SELECT users.*, stores.id AS store_id FROM users LEFT JOIN stores ON stores.owner_id = users.id WHERE users.email = ? LIMIT 1',
+      'SELECT users.*, stores.store_id AS store_id FROM users LEFT JOIN stores ON stores.user_id = users.user_id WHERE users.email = ? LIMIT 1',
       [email],
     );
     const storedHash = user?.password ?? (await dummyHash);
@@ -177,11 +177,15 @@ export function createAuthRoutes(
     }
     if (bcrypt.getRounds(storedHash) !== config.bcryptRounds) {
       await db.execute(
-        'UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND password = ?',
-        [await bcrypt.hash(password, config.bcryptRounds), user.id, storedHash],
+        'UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND password = ?',
+        [
+          await bcrypt.hash(password, config.bcryptRounds),
+          user.user_id,
+          storedHash,
+        ],
       );
     }
-    await rotateSession(c, db, config, user.id);
+    await rotateSession(c, db, config, user.user_id);
     c.set('user', user);
     return c.json({ data: serializeUser(user) });
   });

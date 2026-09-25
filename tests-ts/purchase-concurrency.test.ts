@@ -32,7 +32,7 @@ describe('atomic MySQL purchases and deletion races', () => {
 
   async function stock(productId: string) {
     const rows = await test.db.query<{ stock: number }>(
-      'SELECT stock FROM products WHERE id = ?',
+      'SELECT stock FROM products WHERE product_id = ?',
       [productId],
     );
     return rows[0]?.stock;
@@ -40,7 +40,7 @@ describe('atomic MySQL purchases and deletion races', () => {
 
   async function points(storeId: string) {
     const rows = await test.db.query<{ points: number }>(
-      'SELECT points FROM stores WHERE id = ?',
+      'SELECT points FROM stores WHERE store_id = ?',
       [storeId],
     );
     return rows[0]?.points;
@@ -48,12 +48,12 @@ describe('atomic MySQL purchases and deletion races', () => {
 
   async function transactions(requestId?: string) {
     return test.db.query<{
-      id: string;
+      transaction_id: string;
       product_id: string;
-      buyer_id: string;
+      buyer_user_id: string;
       source: string;
     }>(
-      `SELECT id, product_id, buyer_id, source FROM purchase_transactions${requestId === undefined ? '' : ' WHERE request_id = ?'}`,
+      `SELECT transaction_id, product_id, buyer_user_id, source FROM purchase_transactions${requestId === undefined ? '' : ' WHERE request_id = ?'}`,
       requestId === undefined ? [] : [requestId],
     );
   }
@@ -128,7 +128,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(await stock('product-stool')).toBe(1);
     expect(await points('store-mine')).toBe(620);
     const [store] = await test.db.query<{ level: number }>(
-      "SELECT level FROM stores WHERE id = 'store-mine'",
+      "SELECT level FROM stores WHERE store_id = 'store-mine'",
     );
     expect(store?.level).toBe(4);
     expect(await transactions()).toHaveLength(3);
@@ -171,7 +171,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     await test.db.execute(`
       CREATE TRIGGER hono_test_fail_growth BEFORE UPDATE ON stores
       FOR EACH ROW BEGIN
-        IF NEW.id = 'store-mine' AND NEW.points <> OLD.points THEN
+        IF NEW.store_id = 'store-mine' AND NEW.points <> OLD.points THEN
           SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Intentional growth rollback test';
         END IF;
       END

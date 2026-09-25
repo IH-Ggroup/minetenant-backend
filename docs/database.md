@@ -10,6 +10,45 @@ APIのcamelCase、HTTP status、error codeは[`docs/api.md`](./api.md)を正本�
 MySQLのsnake_case、制約、移行規則を固定します。ここにないMinecraft認証・連携、建築ジョブの
 列やtableは、それぞれの契約Issueで決めます。
 
+## ID物理名と公開APIの境界
+
+DBのID列は最終ER図に合わせ、entityを含む主キー名と役割が分かる外部キー名を使用します。
+
+| table                   | 主キー           | Userへの外部キー                   |
+| ----------------------- | ---------------- | ---------------------------------- |
+| `users`                 | `user_id`        | -                                  |
+| `stores`                | `store_id`       | `user_id`                          |
+| `products`              | `product_id`     | `user_id`                          |
+| `purchase_transactions` | `transaction_id` | `buyer_user_id` / `seller_user_id` |
+| `hono_sessions`         | `session_id`     | `user_id`                          |
+
+公開HTTP APIのJSON名は既存契約を維持します。DB row typeは物理名をそのまま使用し、serializerで
+`user_id` / `store_id` / `product_id` / `transaction_id`を`id`へ、Storeの`user_id`を`ownerId`へ、
+Productの`user_id`を`sellerId`へ、Transactionのrole付きUser IDを`buyerId` / `sellerId`へ変換します。
+FrontendとMinecraftへDBの物理列名は公開しません。
+
+`0001_entity_id_columns`適用後のID関連制約名は次で固定します。
+
+- `stores_user_id_unique`
+- `stores_user_id_foreign`
+- `products_store_id_foreign`
+- `products_user_id_foreign`
+- `products_user_id_created_at_index`
+- `purchase_transactions_product_id_foreign`
+- `purchase_transactions_buyer_user_id_foreign`
+- `purchase_transactions_seller_user_id_foreign`
+- `purchase_transactions_buyer_user_id_created_at_index`
+- `purchase_transactions_seller_user_id_created_at_index`
+- `hono_sessions_user_id_foreign`（`ON DELETE CASCADE`）
+
+上記のうち`hono_sessions.user_id`はNULLを許可し、それ以外のID外部キーはNULLを許可しません。
+Session以外のID外部キーは`ON DELETE RESTRICT`です。
+
+`0001_entity_id_columns`は、改名対象IDへ接続する定義外の外部キー、維持対象indexの欠損、
+view・trigger・routine・event、改名対象table上の式やpartitionなどをDDL前に検出して停止します。
+これらはMySQLの列改名だけでは安全に追随できないため、cutover前に依存内容を確認し、必要なら
+別migrationで明示的に作り直します。
+
 ## 現行から目標への変更
 
 | 対象               | 現行`develop`                 | 目標契約                                                       |
@@ -23,22 +62,22 @@ MySQLのsnake_case、制約、移行規則を固定します。ここにないMi
 | 店舗points         | 販売店舗へ100 pointsだけ加算  | 出品店舗へ10、buyer店舗へ50、販売店舗へ100を初回成功時だけ加算 |
 | 店舗level          | 境界と表示計算が実装に直書き  | Lv1〜5の境界、最大時、表示計算、丸めを共通契約として固定       |
 
-`users`、`stores`とその主キーは既存の`id`を維持します。`stores.owner_id`も改名しません。
+ID列は上記の最終物理名を前提とし、業務機能のmigrationで別名へ戻しません。
 
 ## 決定理由
 
-| 決定                                               | 理由                                                                        |
-| -------------------------------------------------- | --------------------------------------------------------------------------- |
-| 数量ではなく`available / sold`                     | 一点物に`stock>=2`や再入荷という不可能な状態を残さないため                  |
-| 出品keyを`(seller_id, listing_request_id)`で一意化 | 別ユーザーの操作を衝突させず、同じユーザーの重複出品だけを防ぐため          |
-| 購入`request_id`をglobalに一意化                   | Web / Minecraftをまたぐ再送と誤ったID再利用を同じ規則で検出するため         |
-| `purchase_transactions.product_id`を一意化         | applicationのlockに加え、DBでも一商品一取引を保証するため                   |
-| 商品をsoft delete                                  | 物理削除後の再送で同じ出品requestから別Productが生まれるのを防ぐため        |
-| `OUT_OF_STOCK`を維持                               | 既存クライアントの409分岐を壊さず、「すでにsold」の意味へ読み替えられるため |
-| 出品pointsをJSTで1日3件までに制限                  | 削除・再出品や自動出品によるpointsの無制限な取得を抑えるため                |
-| buyerと販売店舗を同じtransactionで更新             | 購入成立と店舗成長の一部だけがcommitされる状態を作らないため                |
-| 最大Lv後もpointsを保持                             | 累計実績を失わず、将来level追加時にも既存pointsを利用できるため             |
-| 進捗率を小数点以下切り捨て                         | 次の境界へ未到達なのに100%と表示する状態を作らないため                      |
+| 決定                                             | 理由                                                                        |
+| ------------------------------------------------ | --------------------------------------------------------------------------- |
+| 数量ではなく`available / sold`                   | 一点物に`stock>=2`や再入荷という不可能な状態を残さないため                  |
+| 出品keyを`(user_id, listing_request_id)`で一意化 | 別ユーザーの操作を衝突させず、同じユーザーの重複出品だけを防ぐため          |
+| 購入`request_id`をglobalに一意化                 | Web / Minecraftをまたぐ再送と誤ったID再利用を同じ規則で検出するため         |
+| `purchase_transactions.product_id`を一意化       | applicationのlockに加え、DBでも一商品一取引を保証するため                   |
+| 商品をsoft delete                                | 物理削除後の再送で同じ出品requestから別Productが生まれるのを防ぐため        |
+| `OUT_OF_STOCK`を維持                             | 既存クライアントの409分岐を壊さず、「すでにsold」の意味へ読み替えられるため |
+| 出品pointsをJSTで1日3件までに制限                | 削除・再出品や自動出品によるpointsの無制限な取得を抑えるため                |
+| buyerと販売店舗を同じtransactionで更新           | 購入成立と店舗成長の一部だけがcommitされる状態を作らないため                |
+| 最大Lv後もpointsを保持                           | 累計実績を失わず、将来level追加時にも既存pointsを利用できるため             |
+| 進捗率を小数点以下切り捨て                       | 次の境界へ未到達なのに100%と表示する状態を作らないため                      |
 
 ## API error codeとの対応
 
@@ -54,13 +93,13 @@ HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
 
 ## `stores`
 
-全ユーザーは登録時に一つのStoreを持ち、`owner_id`は一意です。pointsの加算先はクライアント入力では
+全ユーザーは登録時に一つのStoreを持ち、`user_id`は一意です。pointsの加算先はクライアント入力では
 なく、認証済みuser、lock後のProduct、Storeの所有関係からAPIが決めます。
 
 | 列            | 型                  | NULL | default   | 説明                                |
 | ------------- | ------------------- | ---- | --------- | ----------------------------------- |
-| `id`          | `VARCHAR(255)`      | 不可 | なし      | 既存互換のPK                        |
-| `owner_id`    | `VARCHAR(255)`      | 不可 | なし      | Storeを一つだけ所有するUser         |
+| `store_id`    | `VARCHAR(255)`      | 不可 | なし      | StoreのPK                           |
+| `user_id`     | `VARCHAR(255)`      | 不可 | なし      | Storeを一つだけ所有するUser         |
 | `name`        | `VARCHAR(255)`      | 不可 | なし      | 店舗名                              |
 | `description` | `TEXT`              | 不可 | なし      | 店舗説明                            |
 | `level`       | `SMALLINT UNSIGNED` | 不可 | `1`       | pointsから算出した現在level         |
@@ -71,10 +110,10 @@ HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
 
 ### 制約とindex
 
-- `PRIMARY KEY (id)`
-- `UNIQUE (owner_id)`
+- `PRIMARY KEY (store_id)`
+- `UNIQUE INDEX stores_user_id_unique (user_id)`
 - `INDEX stores_sync_status_index (sync_status)`
-- `FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE RESTRICT`
+- `CONSTRAINT stores_user_id_foreign FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT`
 - `CHECK (level BETWEEN 1 AND 5)`
 
 ### `points`と`level`
@@ -119,7 +158,7 @@ pointsをbackfillしません。
 MySQL transactionで行います。
 
 1. 出品者のStoreを`FOR UPDATE`し、Storeの所有者が認証済みuserと一致することを確認する。
-2. `(seller_id, listing_request_id)`を再確認する。既存Productがあれば現在値を返し、pointsを更新しない。
+2. `(user_id, listing_request_id)`を再確認する。既存Productがあれば現在値を返し、pointsを更新しない。
 3. DB時刻を一度取得し、その値をProductの`created_at`にも使う。
 4. その時刻が属する`Asia/Tokyo`の暦日をUTCの半開区間`[start, nextStart)`へ変換する。
 5. 同じ`store_id`で`listing_request_id IS NOT NULL`かつ`created_at`が区間内のProduct数を数える。
@@ -133,7 +172,7 @@ commitに成功した先着3件だけが加算対象になります。購入処�
 
 #### 購入成立時の2店舗更新
 
-初回購入では、Productをlockして自己購入と`sold`を検証した後、buyerの`owner_id`から購入者店舗を、
+初回購入では、Productをlockして自己購入と`sold`を検証した後、buyerの`user_id`から購入者店舗を、
 Productの`store_id`から販売店舗を確定します。二つのStore IDをUTF-8のbinary byte列で昇順に並べ、
 同じ順番で1行ずつ`FOR UPDATE`します。両方のStoreをlockできた場合だけ、Productの`sold`化、
 Transaction作成、購入者店舗への50 points、販売店舗への100 pointsと、両店舗の`level`再計算を行います。
@@ -149,9 +188,9 @@ deadlockを避けます。
 
 | 列                            | 型                                                   | NULL | default     | 説明                                  |
 | ----------------------------- | ---------------------------------------------------- | ---- | ----------- | ------------------------------------- |
-| `id`                          | `VARCHAR(255)`                                       | 不可 | なし        | 既存互換のPK                          |
+| `product_id`                  | `VARCHAR(255)`                                       | 不可 | なし        | ProductのPK                           |
 | `store_id`                    | `VARCHAR(255)`                                       | 不可 | なし        | 出品店舗                              |
-| `seller_id`                   | `VARCHAR(255)`                                       | 不可 | なし        | 出品者                                |
+| `user_id`                     | `VARCHAR(255)`                                       | 不可 | なし        | 出品者                                |
 | `name`                        | `VARCHAR(255)`                                       | 不可 | なし        | API入力は1〜120文字                   |
 | `description`                 | `TEXT`                                               | 不可 | なし        | API入力は1〜2,000文字                 |
 | `price`                       | `INT UNSIGNED`                                       | 不可 | なし        | 1〜99,999,999円                       |
@@ -171,16 +210,16 @@ deadlockを避けます。
 
 ### 制約とindex
 
-- `PRIMARY KEY (id)`
-- `UNIQUE (seller_id, listing_request_id)`
-- `UNIQUE (id, seller_id)`。Transactionのseller整合を複合外部キーで保証するために使う
+- `PRIMARY KEY (product_id)`
+- `UNIQUE (user_id, listing_request_id)`
+- `UNIQUE (product_id, user_id)`。Transactionのseller整合を複合外部キーで保証するために使う
 - `INDEX products_category_index (category)`
 - `INDEX products_created_at_index (created_at)`
 - `INDEX products_store_id_created_at_index (store_id, created_at)`
-- `INDEX products_seller_id_created_at_index (seller_id, created_at)`
+- `INDEX products_user_id_created_at_index (user_id, created_at)`
 - `INDEX products_public_list_index (deleted_at, created_at)`
-- `FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE RESTRICT`
-- `FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE RESTRICT`
+- `CONSTRAINT products_store_id_foreign FOREIGN KEY (store_id) REFERENCES stores(store_id) ON DELETE RESTRICT`
+- `CONSTRAINT products_user_id_foreign FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT`
 - `CHECK (BINARY status IN ('available','sold'))`
 - `CHECK (price BETWEEN 1 AND 99999999)`
 - `CHECK (BINARY category IN ('fashion','interior','hobby','accessory','tool'))`
@@ -241,38 +280,38 @@ soft delete後も行と一意keyを保持するため、応答を失った古い
 一点物につき最大1行をDB制約でも保証します。Transactionは購入成立時のproduct、buyer、seller、
 source、価格のsnapshotであり、後から商品名や価格が変わっても書き換えません。
 
-| 列           | 型                                                            | NULL | default | 説明                                  |
-| ------------ | ------------------------------------------------------------- | ---- | ------- | ------------------------------------- |
-| `id`         | `VARCHAR(255)`                                                | 不可 | なし    | 既存互換のPK                          |
-| `request_id` | `VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin` | 不可 | なし    | Web/Minecraft共通の購入冪等key        |
-| `product_id` | `VARCHAR(255)`                                                | 不可 | なし    | 購入した一点物、unique                |
-| `buyer_id`   | `VARCHAR(255)`                                                | 不可 | なし    | 認証主体から決めた購入者              |
-| `seller_id`  | `VARCHAR(255)`                                                | 不可 | なし    | lock後のProductから決めた販売者       |
-| `source`     | `VARCHAR(32)`                                                 | 不可 | なし    | `web` / `minecraft`                   |
-| `amount`     | `INT UNSIGNED`                                                | 不可 | なし    | lock後のProductから取得した成立時価格 |
-| `status`     | `VARCHAR(32)`                                                 | 不可 | なし    | `paid` / `shipping` / `complete`      |
-| `created_at` | `TIMESTAMP`                                                   | 可   | `NULL`  | 現行互換の成立日時                    |
-| `updated_at` | `TIMESTAMP`                                                   | 可   | `NULL`  | 現行互換の更新日時                    |
+| 列               | 型                                                            | NULL | default | 説明                                  |
+| ---------------- | ------------------------------------------------------------- | ---- | ------- | ------------------------------------- |
+| `transaction_id` | `VARCHAR(255)`                                                | 不可 | なし    | TransactionのPK                       |
+| `request_id`     | `VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin` | 不可 | なし    | Web/Minecraft共通の購入冪等key        |
+| `product_id`     | `VARCHAR(255)`                                                | 不可 | なし    | 購入した一点物、unique                |
+| `buyer_user_id`  | `VARCHAR(255)`                                                | 不可 | なし    | 認証主体から決めた購入者              |
+| `seller_user_id` | `VARCHAR(255)`                                                | 不可 | なし    | lock後のProductから決めた販売者       |
+| `source`         | `VARCHAR(32)`                                                 | 不可 | なし    | `web` / `minecraft`                   |
+| `amount`         | `INT UNSIGNED`                                                | 不可 | なし    | lock後のProductから取得した成立時価格 |
+| `status`         | `VARCHAR(32)`                                                 | 不可 | なし    | `paid` / `shipping` / `complete`      |
+| `created_at`     | `TIMESTAMP`                                                   | 可   | `NULL`  | 現行互換の成立日時                    |
+| `updated_at`     | `TIMESTAMP`                                                   | 可   | `NULL`  | 現行互換の更新日時                    |
 
 ### 制約とindex
 
-- `PRIMARY KEY (id)`
+- `PRIMARY KEY (transaction_id)`
 - `UNIQUE (request_id)`
 - 現行の`purchase_transactions_product_id_index`を`UNIQUE (product_id)`へ変更する
-- `INDEX purchase_transactions_product_seller (product_id, seller_id)`
+- `INDEX purchase_transactions_product_seller (product_id, seller_user_id)`
 - `INDEX purchase_transactions_source_index (source)`
 - `INDEX purchase_transactions_status_index (status)`
-- `INDEX purchase_transactions_buyer_id_created_at_index (buyer_id, created_at)`
-- `INDEX purchase_transactions_seller_id_created_at_index (seller_id, created_at)`
-- `FOREIGN KEY (product_id, seller_id) REFERENCES products(id, seller_id) ON DELETE RESTRICT`
-- `FOREIGN KEY (buyer_id) REFERENCES users(id) ON DELETE RESTRICT`
-- `FOREIGN KEY (seller_id) REFERENCES users(id) ON DELETE RESTRICT`
-- `CHECK (buyer_id <> seller_id)`
+- `INDEX purchase_transactions_buyer_user_id_created_at_index (buyer_user_id, created_at)`
+- `INDEX purchase_transactions_seller_user_id_created_at_index (seller_user_id, created_at)`
+- `FOREIGN KEY (product_id, seller_user_id) REFERENCES products(product_id, user_id) ON DELETE RESTRICT`
+- `CONSTRAINT purchase_transactions_buyer_user_id_foreign FOREIGN KEY (buyer_user_id) REFERENCES users(user_id) ON DELETE RESTRICT`
+- `CONSTRAINT purchase_transactions_seller_user_id_foreign FOREIGN KEY (seller_user_id) REFERENCES users(user_id) ON DELETE RESTRICT`
+- `CHECK (buyer_user_id <> seller_user_id)`
 - `CHECK (BINARY source IN ('web','minecraft'))`
 - `CHECK (BINARY status IN ('paid','shipping','complete'))`
 - `CHECK (amount BETWEEN 1 AND 99999999)`
 
-同じ`request_id`の同内容再送とは、既存行の`product_id`、`buyer_id`、`source`がすべて今回の
+同じ`request_id`の同内容再送とは、既存行の`product_id`、`buyer_user_id`、`source`がすべて今回の
 認証済み入力と一致することです。一致すれば既存Transactionを返します。一つでも違えば409
 `REQUEST_ID_CONFLICT`とし、Product、Transaction、店舗pointsを変更しません。
 初回の作成は201、同内容の再送は200で同じTransaction IDとimmutable fieldsを返します。配送状態が
@@ -317,7 +356,7 @@ backfill、互換trigger追加、検証のcommitが完了するまで再開し�
 - ProductごとのTransaction件数
 - Transactionありかつ`stock>0`の行
 - 同じProductにTransactionが2件以上ある行
-- Transactionの`seller_id`が参照先Productの`seller_id`と異なる行
+- Transactionの`seller_user_id`が参照先Productの`user_id`と異なる行
 - 存在しないstore、seller、productを参照する行
 - 100文字超過または`[A-Za-z0-9._:-]`以外を含む購入`request_id`。grandfather再送テスト用の監査一覧
 - buyerとsellerが同じTransaction、範囲外amount、`web` / `minecraft`以外のsource、

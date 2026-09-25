@@ -5,6 +5,7 @@ import {
   evaluateDatabaseMetadata,
   readinessActions,
   readinessProblems,
+  INITIAL_SCHEMA_REQUIREMENTS,
   REQUIRED_SCHEMA,
   supportsMySqlVersion,
 } from '../src/readiness.js';
@@ -33,7 +34,7 @@ const indexes = [
     indexName: 'owner_unique',
     nonUnique: 0,
     sequence: 1,
-    columnName: 'owner_id',
+    columnName: 'user_id',
   },
   {
     tableName: 'purchase_transactions',
@@ -112,7 +113,7 @@ describe('database readiness', () => {
     );
     expect(readiness.missingTables).toEqual(['hono_sessions']);
     expect(readiness.missingColumns).toEqual(['products.stock']);
-    expect(readiness.missingUniqueKeys).toEqual(['stores.owner_id']);
+    expect(readiness.missingUniqueKeys).toEqual(['stores.user_id']);
     expect(readinessProblems(readiness).join('\n')).toContain(
       '未作成のテーブル',
     );
@@ -123,6 +124,17 @@ describe('database readiness', () => {
     expect(new DatabaseReadinessError(readiness).code).toBe(
       'MINETENANT_SCHEMA_MISMATCH',
     );
+  });
+
+  it('keeps the 0000 migration requirements on the historical column names', () => {
+    expect(INITIAL_SCHEMA_REQUIREMENTS.tables.users).toContain('id');
+    expect(INITIAL_SCHEMA_REQUIREMENTS.tables.users).not.toContain('user_id');
+    expect(INITIAL_SCHEMA_REQUIREMENTS.tables.stores).toContain('owner_id');
+    expect(INITIAL_SCHEMA_REQUIREMENTS.tables.products).toContain('seller_id');
+    expect(INITIAL_SCHEMA_REQUIREMENTS.tables.purchase_transactions).toEqual(
+      expect.arrayContaining(['id', 'buyer_id', 'seller_id']),
+    );
+    expect(INITIAL_SCHEMA_REQUIREMENTS.tables.hono_sessions).toContain('id');
   });
 
   it('classifies an empty database as repairable by setup', () => {

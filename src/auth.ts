@@ -16,7 +16,7 @@ export interface AuthSession {
 }
 
 interface SessionRow {
-  id: string;
+  session_id: string;
   user_id: string | null;
   csrf_token: string;
   expires_at: number;
@@ -39,7 +39,7 @@ async function insertSession(
   session: AuthSession,
 ): Promise<void> {
   await db.execute(
-    'INSERT INTO hono_sessions (id, user_id, csrf_token, expires_at) VALUES (?, ?, ?, ?)',
+    'INSERT INTO hono_sessions (session_id, user_id, csrf_token, expires_at) VALUES (?, ?, ?, ?)',
     [session.id, session.userId, session.csrfToken, session.expiresAt],
   );
 }
@@ -96,19 +96,19 @@ export function sessionMiddleware(
     let session: AuthSession | undefined;
     if (cookie && /^[a-f0-9]{64}$/.test(cookie)) {
       const [row] = await db.query<SessionRow>(
-        'SELECT id, user_id, csrf_token, expires_at FROM hono_sessions WHERE id = ? AND expires_at > ?',
+        'SELECT session_id, user_id, csrf_token, expires_at FROM hono_sessions WHERE session_id = ? AND expires_at > ?',
         [cookie, now],
       );
       if (row) {
         const expiresAt = now + config.sessionLifetime * 60_000;
         const updated = await db.execute(
-          'UPDATE hono_sessions SET expires_at = ? WHERE id = ? AND expires_at > ?',
-          [expiresAt, row.id, now],
+          'UPDATE hono_sessions SET expires_at = ? WHERE session_id = ? AND expires_at > ?',
+          [expiresAt, row.session_id, now],
         );
         // An overlapping logout must never recreate a session it invalidated.
         if (updated.affectedRows > 0) {
           session = {
-            id: row.id,
+            id: row.session_id,
             userId: row.user_id,
             csrfToken: row.csrf_token,
             expiresAt,
@@ -124,7 +124,7 @@ export function sessionMiddleware(
     let user: UserRow | undefined;
     if (session.userId) {
       [user] = await db.query<UserRow>(
-        'SELECT users.*, stores.id AS store_id FROM users LEFT JOIN stores ON stores.owner_id = users.id WHERE users.id = ?',
+        'SELECT users.*, stores.store_id AS store_id FROM users LEFT JOIN stores ON stores.user_id = users.user_id WHERE users.user_id = ?',
         [session.userId],
       );
     }
@@ -164,7 +164,9 @@ export async function rotateSession(
   const replacement = newSession(config, userId);
   await db.transaction(async (tx) => {
     if (previous)
-      await tx.execute('DELETE FROM hono_sessions WHERE id = ?', [previous.id]);
+      await tx.execute('DELETE FROM hono_sessions WHERE session_id = ?', [
+        previous.id,
+      ]);
     await insertSession(tx, replacement);
   });
   c.set('session', replacement);

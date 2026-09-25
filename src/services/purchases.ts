@@ -20,7 +20,7 @@ function ensureSamePurchase(
 ): void {
   if (
     transaction.product_id !== input.productId ||
-    transaction.buyer_id !== input.buyerId ||
+    transaction.buyer_user_id !== input.buyerId ||
     transaction.source !== input.source
   ) {
     requestIdConflict();
@@ -53,7 +53,7 @@ export async function purchase(
       }
 
       const [product] = await tx.query<ProductRow>(
-        'SELECT * FROM products WHERE id = ? FOR UPDATE',
+        'SELECT * FROM products WHERE product_id = ? FOR UPDATE',
         [input.productId],
       );
       if (!product) notFound();
@@ -66,42 +66,42 @@ export async function purchase(
         return { transaction: committed, created: false };
       }
 
-      if (product.seller_id === input.buyerId) selfPurchase();
+      if (product.user_id === input.buyerId) selfPurchase();
       if (Number(product.stock) < 1) outOfStock();
 
       const [store] = await tx.query<StoreRow>(
-        'SELECT * FROM stores WHERE id = ? FOR UPDATE',
+        'SELECT * FROM stores WHERE store_id = ? FOR UPDATE',
         [product.store_id],
       );
       if (!store) notFound();
 
       await tx.execute(
-        'UPDATE products SET stock = stock - 1, updated_at = UTC_TIMESTAMP() WHERE id = ?',
-        [product.id],
+        'UPDATE products SET stock = stock - 1, updated_at = UTC_TIMESTAMP() WHERE product_id = ?',
+        [product.product_id],
       );
-      const id = randomUUID();
+      const transactionId = randomUUID();
       await tx.execute(
         `INSERT INTO purchase_transactions
-          (id, request_id, product_id, buyer_id, seller_id, source, amount, status, created_at, updated_at)
+          (transaction_id, request_id, product_id, buyer_user_id, seller_user_id, source, amount, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'paid', UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
         [
-          id,
+          transactionId,
           input.requestId,
-          product.id,
+          product.product_id,
           input.buyerId,
-          product.seller_id,
+          product.user_id,
           input.source,
           product.price,
         ],
       );
       const points = Number(store.points) + Math.max(0, Math.trunc(salePoints));
       await tx.execute(
-        'UPDATE stores SET points = ?, level = ?, updated_at = UTC_TIMESTAMP() WHERE id = ?',
-        [points, levelForPoints(points), store.id],
+        'UPDATE stores SET points = ?, level = ?, updated_at = UTC_TIMESTAMP() WHERE store_id = ?',
+        [points, levelForPoints(points), store.store_id],
       );
       const [transaction] = await tx.query<TransactionRow>(
-        'SELECT * FROM purchase_transactions WHERE id = ?',
-        [id],
+        'SELECT * FROM purchase_transactions WHERE transaction_id = ?',
+        [transactionId],
       );
       if (!transaction) throw new Error('Created transaction was not found.');
       return { transaction, created: true };

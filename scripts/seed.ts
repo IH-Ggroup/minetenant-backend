@@ -98,7 +98,9 @@ export async function seedDemo(
       'products',
       'purchase_transactions',
     ]) {
-      const rows = await tx.query(`SELECT id FROM ${table} LIMIT 1 FOR UPDATE`);
+      const rows = await tx.query(
+        `SELECT 1 AS present FROM ${table} LIMIT 1 FOR UPDATE`,
+      );
       if (rows.length) return false;
     }
     const seededAt = '2026-07-13 00:00:00';
@@ -121,7 +123,7 @@ export async function seedDemo(
       ],
     ]) {
       await tx.execute(
-        `INSERT INTO users (id,name,email,role,role_label,avatar_initial,password,created_at,updated_at)
+        `INSERT INTO users (user_id,name,email,role,role_label,avatar_initial,password,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?)`,
         [...user, password, seededAt, seededAt],
       );
@@ -147,21 +149,21 @@ export async function seedDemo(
       ],
     ]) {
       await tx.execute(
-        `INSERT INTO stores (id,owner_id,name,description,level,points,sync_status,created_at,updated_at)
+        `INSERT INTO stores (store_id,user_id,name,description,level,points,sync_status,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?)`,
         [...store, seededAt, seededAt],
       );
     }
     for (const product of products) {
       await tx.execute(
-        `INSERT INTO products (id,store_id,seller_id,name,description,price,stock,category,theme,emoji,created_at,updated_at)
+        `INSERT INTO products (product_id,store_id,user_id,name,description,price,stock,category,theme,emoji,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         [...product, product[10]],
       );
     }
     await tx.execute(
       `INSERT INTO purchase_transactions
-      (id,request_id,product_id,buyer_id,seller_id,source,amount,status,created_at,updated_at)
+      (transaction_id,request_id,product_id,buyer_user_id,seller_user_id,source,amount,status,created_at,updated_at)
       VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [
         'transaction-demo',

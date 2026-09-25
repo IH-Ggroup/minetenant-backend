@@ -21,9 +21,9 @@ export function serializeTimestamp(value: Timestamp): string | null {
 
 export function serializeProduct(product: ProductRow) {
   return {
-    id: product.id,
+    id: product.product_id,
     storeId: product.store_id,
-    sellerId: product.seller_id,
+    sellerId: product.user_id,
     name: product.name,
     description: product.description,
     price: Number(product.price),
@@ -37,8 +37,8 @@ export function serializeProduct(product: ProductRow) {
 
 export function serializeStore(store: StoreRow) {
   return {
-    id: store.id,
-    ownerId: store.owner_id,
+    id: store.store_id,
+    ownerId: store.user_id,
     name: store.name,
     description: store.description,
     level: Number(store.level),
@@ -49,10 +49,10 @@ export function serializeStore(store: StoreRow) {
 
 export function serializeTransaction(transaction: TransactionRow) {
   return {
-    id: transaction.id,
+    id: transaction.transaction_id,
     productId: transaction.product_id,
-    buyerId: transaction.buyer_id,
-    sellerId: transaction.seller_id,
+    buyerId: transaction.buyer_user_id,
+    sellerId: transaction.seller_user_id,
     source: transaction.source,
     amount: Number(transaction.amount),
     status: transaction.status,
@@ -62,7 +62,7 @@ export function serializeTransaction(transaction: TransactionRow) {
 
 export function serializeUser(user: UserRow) {
   return {
-    id: user.id,
+    id: user.user_id,
     name: user.name,
     role: user.role,
     roleLabel: user.role_label,

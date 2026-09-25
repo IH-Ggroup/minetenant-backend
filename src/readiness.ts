@@ -67,15 +67,76 @@ export const INITIAL_SCHEMA_REQUIREMENTS = {
   ],
 } as const satisfies SchemaRequirements;
 
+/** Current application schema after 0001_entity_id_columns. */
+export const CURRENT_SCHEMA_REQUIREMENTS = {
+  tables: {
+    users: [
+      'user_id',
+      'name',
+      'email',
+      'password',
+      'role',
+      'role_label',
+      'avatar_initial',
+      'created_at',
+      'updated_at',
+    ],
+    stores: [
+      'store_id',
+      'user_id',
+      'name',
+      'description',
+      'level',
+      'points',
+      'sync_status',
+      'created_at',
+      'updated_at',
+    ],
+    products: [
+      'product_id',
+      'store_id',
+      'user_id',
+      'name',
+      'description',
+      'price',
+      'stock',
+      'category',
+      'theme',
+      'emoji',
+      'created_at',
+      'updated_at',
+    ],
+    purchase_transactions: [
+      'transaction_id',
+      'request_id',
+      'product_id',
+      'buyer_user_id',
+      'seller_user_id',
+      'source',
+      'amount',
+      'status',
+      'created_at',
+      'updated_at',
+    ],
+    hono_sessions: ['session_id', 'user_id', 'csrf_token', 'expires_at'],
+    hono_rate_limits: ['key_hash', 'hits', 'expires_at'],
+  },
+  uniqueKeys: [
+    { table: 'users', column: 'email' },
+    { table: 'stores', column: 'user_id' },
+    { table: 'purchase_transactions', column: 'request_id' },
+  ],
+} as const satisfies SchemaRequirements;
+
 export const REQUIRED_SCHEMA = {
-  ...INITIAL_SCHEMA_REQUIREMENTS.tables,
+  ...CURRENT_SCHEMA_REQUIREMENTS.tables,
   schema_migrations: ['version', 'applied_at'],
 } as const;
 
 const APPLICATION_SCHEMA_REQUIREMENTS: SchemaRequirements = {
   tables: REQUIRED_SCHEMA,
   uniqueKeys: [
-    ...INITIAL_SCHEMA_REQUIREMENTS.uniqueKeys,
+    ...CURRENT_SCHEMA_REQUIREMENTS.uniqueKeys,
     { table: 'schema_migrations', column: 'version' },
   ],
 };

@@ -12,24 +12,24 @@ export async function createProduct(
   input: CreateProductInput,
 ): Promise<ProductRow> {
   const [store] = await db.query<StoreRow>(
-    'SELECT * FROM stores WHERE id = ?',
+    'SELECT * FROM stores WHERE store_id = ?',
     [input.storeId],
   );
   if (!store) notFound();
-  if (store.owner_id !== input.sellerId) {
+  if (store.user_id !== input.sellerId) {
     throw new ValidationError({
       sellerId: ['出品者と店舗の所有者が一致しません。'],
     });
   }
 
   return db.transaction(async (tx) => {
-    const id = randomUUID();
+    const productId = randomUUID();
     await tx.execute(
       `INSERT INTO products
-        (id, store_id, seller_id, name, description, price, stock, category, theme, emoji, created_at, updated_at)
+        (product_id, store_id, user_id, name, description, price, stock, category, theme, emoji, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())`,
       [
-        id,
+        productId,
         input.storeId,
         input.sellerId,
         input.name,
@@ -42,8 +42,8 @@ export async function createProduct(
       ],
     );
     const [product] = await tx.query<ProductRow>(
-      'SELECT * FROM products WHERE id = ?',
-      [id],
+      'SELECT * FROM products WHERE product_id = ?',
+      [productId],
     );
     if (!product) throw new Error('Created product was not found.');
     return product;
@@ -59,14 +59,14 @@ export async function deleteProduct(
     // Purchases take the same lock, so a sale cannot slip between the history
     // check and deletion.
     const [product] = await tx.query<ProductRow>(
-      'SELECT * FROM products WHERE id = ? FOR UPDATE',
+      'SELECT * FROM products WHERE product_id = ? FOR UPDATE',
       [productId],
     );
     if (!product) notFound();
-    if (product.seller_id !== userId)
+    if (product.user_id !== userId)
       throw new HttpError(403, 'Only the seller can delete this product.');
-    const [transaction] = await tx.query<{ id: string }>(
-      'SELECT id FROM purchase_transactions WHERE product_id = ? LIMIT 1',
+    const [transaction] = await tx.query<{ transaction_id: string }>(
+      'SELECT transaction_id FROM purchase_transactions WHERE product_id = ? LIMIT 1',
       [productId],
     );
     if (transaction)
@@ -74,6 +74,6 @@ export async function deleteProduct(
         409,
         'Products with transaction history cannot be deleted.',
       );
-    await tx.execute('DELETE FROM products WHERE id = ?', [productId]);
+    await tx.execute('DELETE FROM products WHERE product_id = ?', [productId]);
   });
 }

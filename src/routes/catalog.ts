@@ -36,8 +36,8 @@ export function createCatalogRoutes(
     const keyword =
       validator.string('keyword', { nullable: true, max: 120 }) ?? '';
     if (storeId !== undefined) {
-      const [store] = await db.query<{ id: string }>(
-        'SELECT id FROM stores WHERE id = ?',
+      const [store] = await db.query<{ store_id: string }>(
+        'SELECT store_id FROM stores WHERE store_id = ?',
         [storeId],
       );
       if (!store) validator.add('storeId', 'The selected store id is invalid.');
@@ -64,7 +64,7 @@ export function createCatalogRoutes(
 
   routes.get('/products/:product', async (c) => {
     const [product] = await db.query<ProductRow>(
-      'SELECT * FROM products WHERE id = ?',
+      'SELECT * FROM products WHERE product_id = ?',
       [c.req.param('product')],
     );
     if (!product) notFound();
@@ -74,13 +74,13 @@ export function createCatalogRoutes(
   routes.post('/products', requireAuth, async (c) => {
     const user = c.get('user')!;
     const data = await parseBody(c.req.raw);
-    if (!Object.hasOwn(data, 'sellerId')) data.sellerId = user.id;
+    if (!Object.hasOwn(data, 'sellerId')) data.sellerId = user.user_id;
     if (!Object.hasOwn(data, 'storeId')) {
-      const [store] = await db.query<{ id: string }>(
-        'SELECT id FROM stores WHERE owner_id = ?',
-        [user.id],
+      const [store] = await db.query<{ store_id: string }>(
+        'SELECT store_id FROM stores WHERE user_id = ?',
+        [user.user_id],
       );
-      data.storeId = store?.id ?? null;
+      data.storeId = store?.store_id ?? null;
     }
     const validator = new Validator(data);
     const storeId = validator.string('storeId', {
@@ -89,7 +89,7 @@ export function createCatalogRoutes(
     });
     const sellerId = validator.string('sellerId', {
       required: true,
-      in: [user.id],
+      in: [user.user_id],
       messages: { required: '出品者を指定してください。' },
     });
     const name = validator.string('name', {
@@ -138,8 +138,8 @@ export function createCatalogRoutes(
       messages: { required: '商品を表す絵文字を指定してください。' },
     });
     if (storeId !== undefined) {
-      const [store] = await db.query<{ id: string }>(
-        'SELECT id FROM stores WHERE id = ?',
+      const [store] = await db.query<{ store_id: string }>(
+        'SELECT store_id FROM stores WHERE store_id = ?',
         [storeId],
       );
       if (!store) validator.add('storeId', '指定された店舗が見つかりません。');
@@ -160,13 +160,13 @@ export function createCatalogRoutes(
   });
 
   routes.delete('/products/:product', requireAuth, async (c) => {
-    await deleteProduct(db, c.req.param('product'), c.get('user')!.id);
+    await deleteProduct(db, c.req.param('product'), c.get('user')!.user_id);
     return c.body(null, 204);
   });
 
   routes.get('/stores/:store', async (c) => {
     const [store] = await db.query<StoreRow>(
-      'SELECT * FROM stores WHERE id = ?',
+      'SELECT * FROM stores WHERE store_id = ?',
       [c.req.param('store')],
     );
     if (!store) notFound();
@@ -175,29 +175,29 @@ export function createCatalogRoutes(
 
   routes.get('/stores/:store/dashboard', requireAuth, async (c) => {
     const [store] = await db.query<StoreRow>(
-      'SELECT * FROM stores WHERE id = ?',
+      'SELECT * FROM stores WHERE store_id = ?',
       [c.req.param('store')],
     );
     if (!store) notFound();
-    if (store.owner_id !== c.get('user')!.id)
+    if (store.user_id !== c.get('user')!.user_id)
       throw new HttpError(403, 'Forbidden');
     return c.json({ data: await getStoreDashboard(db, store) });
   });
 
   routes.get('/users', requireAuth, async (c) => {
     const users = await db.query<UserRow>(
-      'SELECT u.*, s.id AS store_id FROM users u LEFT JOIN stores s ON s.owner_id = u.id ORDER BY u.name',
+      'SELECT u.*, s.store_id AS store_id FROM users u LEFT JOIN stores s ON s.user_id = u.user_id ORDER BY u.name',
     );
     return c.json({ data: users.map(serializeUser) });
   });
 
   routes.get('/transactions', requireAuth, async (c) => {
-    const userId = c.get('user')!.id;
+    const userId = c.get('user')!.user_id;
     const validator = new Validator(parseQuery(c.req.url));
     validator.string('userId', { in: [userId] });
     validator.throwIfInvalid();
     const transactions = await db.query<TransactionRow>(
-      'SELECT * FROM purchase_transactions WHERE buyer_id = ? OR seller_id = ? ORDER BY created_at DESC',
+      'SELECT * FROM purchase_transactions WHERE buyer_user_id = ? OR seller_user_id = ? ORDER BY created_at DESC',
       [userId, userId],
     );
     return c.json({ data: transactions.map(serializeTransaction) });
@@ -205,12 +205,15 @@ export function createCatalogRoutes(
 
   routes.get('/transactions/:transaction', requireAuth, async (c) => {
     const [transaction] = await db.query<TransactionRow>(
-      'SELECT * FROM purchase_transactions WHERE id = ?',
+      'SELECT * FROM purchase_transactions WHERE transaction_id = ?',
       [c.req.param('transaction')],
     );
     if (!transaction) notFound();
-    const userId = c.get('user')!.id;
-    if (transaction.buyer_id !== userId && transaction.seller_id !== userId)
+    const userId = c.get('user')!.user_id;
+    if (
+      transaction.buyer_user_id !== userId &&
+      transaction.seller_user_id !== userId
+    )
       throw new HttpError(403, 'Forbidden');
     return c.json({ data: serializeTransaction(transaction) });
   });
