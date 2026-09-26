@@ -149,18 +149,25 @@ MySQLのDDLはステートメント単位で暗黙にcommitされるため、複
 失敗時は書き込みを停めたまま、エラー・DB状態・履歴を確認します。同じversionを
 再実行可能なままfix-forwardし、`npm run db:migrate`を再実行してください。
 
-## 検証
+## CIとローカル検証
+
+`develop`または`main`を対象にしたPull Requestと、それらのbranchへのpushでは、
+GitHub Actionsの`Backend CI` workflowが動きます。`develop`へのmergeにはrequired check
+`Fresh clone and quality checks`の成功と、1人以上のApproveが必要です。
+
+このcheckはNode.jsとMySQL 8.4を準備し、fresh cloneの起動前処理を2回実行して
+再実行可能性を確認した後、次のローカル同等コマンドを記載順に実行します。
+
+```bash
+npm run format:check
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
 [database/setup-local.sql](database/setup-local.sql)は専用の
 `minetenant_test`も準備します。`npm test`はこのDBだけを初期化します。
-
-```bash
-npm run typecheck
-npm run lint
-npm test
-npm run build
-npm run format:check
-```
 
 別のMySQLで検証するときは`TEST_DB_HOST`・`TEST_DB_PORT`・
 `TEST_DB_USERNAME`・`TEST_DB_PASSWORD`を指定します。
