@@ -12,10 +12,14 @@ const products = [
     'コバルトブルーのパーカー',
     '深い青色と、ゆったりしたシルエットが特徴のパーカーです。普段使いしやすい厚さに仕上げました。',
     6800,
-    3,
+    1,
+    'available',
     'fashion',
     'ocean',
     '🧥',
+    null,
+    null,
+    null,
     '2026-07-18 09:00:00',
   ],
   [
@@ -25,10 +29,14 @@ const products = [
     '森の木製スツール',
     '天然木の表情を残して仕上げた小さなスツールです。椅子としても飾り台としても使えます。',
     4200,
-    2,
+    0,
+    'sold',
     'interior',
     'forest',
     '🪵',
+    null,
+    null,
+    null,
     '2026-07-17 04:30:00',
   ],
   [
@@ -39,9 +47,13 @@ const products = [
     '紫色の表紙に箔押しを施したハンドメイドノート。冒険の記録やアイデア帳におすすめです。',
     1800,
     0,
+    'sold',
     'hobby',
     'amethyst',
     '📕',
+    null,
+    null,
+    null,
     '2026-07-16 12:00:00',
   ],
   [
@@ -51,10 +63,14 @@ const products = [
     '鉱石モチーフペンダント',
     '光を受けてきらめく鉱石をイメージしたペンダントです。長さを調整できるコードを使用しています。',
     3200,
-    4,
+    1,
+    'available',
     'accessory',
     'sunset',
     '💎',
+    null,
+    null,
+    null,
     '2026-07-15 07:00:00',
   ],
   [
@@ -65,9 +81,13 @@ const products = [
     '丈夫な帆布で作った道具入れです。内側を仕切り、細かな道具も迷子になりにくくしました。',
     5800,
     1,
+    'available',
     'tool',
     'sand',
     '👜',
+    null,
+    null,
+    null,
     '2026-07-14 03:15:00',
   ],
   [
@@ -77,10 +97,14 @@ const products = [
     '苔むしたランタン',
     '森の遺跡に置かれたランタンをイメージした小型照明です。やわらかな暖色の光が広がります。',
     7500,
-    5,
+    1,
+    'available',
     'interior',
     'moss',
     '🏮',
+    null,
+    null,
+    null,
     '2026-07-13 10:45:00',
   ],
 ];
@@ -156,9 +180,10 @@ export async function seedDemo(
     }
     for (const product of products) {
       await tx.execute(
-        `INSERT INTO products (product_id,store_id,user_id,name,description,price,stock,category,theme,emoji,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [...product, product[10]],
+        `INSERT INTO products
+        (product_id,store_id,user_id,name,description,price,stock,status,category,theme,emoji,listing_request_id,listing_request_fingerprint,deleted_at,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [...product, product[14]],
       );
     }
     await tx.execute(

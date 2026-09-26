@@ -76,6 +76,17 @@ describe('database diagnostics', () => {
     expect(output).not.toContain(error.message);
   });
 
+  it('explains an unsafe product-status migration without exposing schema details', () => {
+    const error = Object.assign(new Error('private product migration detail'), {
+      code: 'MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE',
+    });
+    const output = formatErrorForLog('SETUP_FAILED', error, config);
+    expect(output).toContain('MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE');
+    expect(output).toContain('db:bootstrap');
+    expect(output).toContain('TRIGGER');
+    expect(output).not.toContain(error.message);
+  });
+
   it('rejects unsafe database identifiers used by the administrator command', () => {
     expect(quoteDatabaseName('minetenant_test')).toBe('`minetenant_test`');
     expect(() => quoteDatabaseName('minetenant; DROP DATABASE mysql')).toThrow(
@@ -121,13 +132,41 @@ describe('database diagnostics', () => {
       missingTables: ['hono_sessions'],
       missingColumns: [],
       missingUniqueKeys: [],
+      invalidTables: [],
+      invalidTriggers: [],
     };
     expect(() => assertAdditiveSchemaSafe(safe)).not.toThrow();
     expect(() =>
       assertAdditiveSchemaSafe({
         ...safe,
+        missingTables: ['product_status_migration_product_audit'],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'MINETENANT_SCHEMA_MISMATCH' }),
+    );
+    expect(() =>
+      assertAdditiveSchemaSafe({
+        ...safe,
         missingTables: [],
         missingColumns: ['users.password'],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'MINETENANT_SCHEMA_MISMATCH' }),
+    );
+    expect(() =>
+      assertAdditiveSchemaSafe({
+        ...safe,
+        missingTables: [],
+        invalidTables: ['product_status_migration_product_audit'],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'MINETENANT_SCHEMA_MISMATCH' }),
+    );
+    expect(() =>
+      assertAdditiveSchemaSafe({
+        ...safe,
+        missingTables: [],
+        invalidTriggers: ['products_status_compatibility_before_update'],
       }),
     ).toThrowError(
       expect.objectContaining({ code: 'MINETENANT_SCHEMA_MISMATCH' }),

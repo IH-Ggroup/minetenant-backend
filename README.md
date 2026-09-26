@@ -5,7 +5,7 @@ API、Cookie認証、在庫・購入処理を提供します。
 
 ## 最短セットアップ
 
-Node.js 22.22.2以上とMySQL 8.0以上を用意します（CIではMySQL 8.4で検証します）。
+Node.js 22.22.2以上とMySQL 8.0.17以上を用意します（CIではMySQL 8.4で検証します）。
 ローカル起動にDockerは不要です。
 Node.jsは[`.nvmrc`](.nvmrc)と`package.json`で同じ版を指定しています。
 
@@ -30,12 +30,17 @@ npm run dev
 - 未適用のDB変更がある場合は、DB単位で直列化してversion順に1度だけ適用
 - 初期準備後にもう一度doctorを通してからHonoを起動
 
-初期DB準備が必要なときだけ、MySQL管理ユーザー（初期値は`root`）の
-パスワード入力が表示されます。入力内容は画面や`.env`へ保存しません。その後、次をまとめて行います。
+初期DB準備、またはtriggerを追加する未適用migrationの管理者準備が必要なときだけ、
+MySQL管理ユーザー（初期値は`root`）のパスワード入力が表示されます。入力内容は画面や
+`.env`へ保存しません。その後、次をまとめて行います。
 
 - 開発DB・テストDB・アプリ接続用ユーザーの作成
+- binary log有効時に必要なローカル用trigger作成設定の有効化
 - 未作成テーブルの追加
 - 空DBへのデモデータ投入
+
+既存DBのtrigger追加migrationでも、DBとユーザーは`IF NOT EXISTS`で確認し、
+接続用ユーザーのパスワード、既存テーブル、既存データは変更しません。
 
 初回に作る`.env`には、このclone専用のランダムなDBユーザー名とパスワードを生成します。
 そのため、PCに同名ユーザーが残っていても上書きせず、別cloneの接続も壊しません。
@@ -67,16 +72,17 @@ Windows PowerShellでは`$env:PORT="8788"; npm run dev`です。
 ## 起動できないとき
 
 最初に`npm run doctor`を実行してください。Node.js、MySQLの接続先・バージョン、DB、
-必須テーブル・列・一意制約をパスワードを表示せず確認します。よくあるエラーは次のように対処できます。
+必須テーブル・列・一意制約・互換triggerをパスワードを表示せず確認します。よくあるエラーは次のように対処できます。
 
-| コード                         | 原因                                     | 対処                                                  |
-| ------------------------------ | ---------------------------------------- | ----------------------------------------------------- |
-| `ECONNREFUSED`                 | MySQL停止、またはhost・port違い          | MySQLを起動し、`.env`の`DB_HOST`・`DB_PORT`を確認     |
-| `ER_ACCESS_DENIED_ERROR`       | 接続用ユーザー未作成、または認証情報違い | 初回は`npm run dev`が自動準備。既存`.env`は設定を確認 |
-| `ER_BAD_DB_ERROR`              | `DB_DATABASE`のDBが未作成                | `npm run dev`がローカルDBを自動準備                   |
-| `MINETENANT_MIGRATION_PENDING` | 履歴にないDB変更がコードに登録済み       | ローカルでは`npm run dev`がversion順に適用            |
-| `MINETENANT_SCHEMA_INCOMPLETE` | 適用済み履歴に対して必須テーブルが不足   | DBをバックアップして履歴と実schemaを調査              |
-| `MINETENANT_SCHEMA_MISMATCH`   | 適用済み履歴に対して列・一意制約が不足   | DBをバックアップして履歴と実schemaを調査              |
+| コード                                       | 原因                                                                       | 対処                                                                                   |
+| -------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `ECONNREFUSED`                               | MySQL停止、またはhost・port違い                                            | MySQLを起動し、`.env`の`DB_HOST`・`DB_PORT`を確認                                      |
+| `ER_ACCESS_DENIED_ERROR`                     | 接続用ユーザー未作成、または認証情報違い                                   | 初回は`npm run dev`が自動準備。既存`.env`は設定を確認                                  |
+| `ER_BAD_DB_ERROR`                            | `DB_DATABASE`のDBが未作成                                                  | `npm run dev`がローカルDBを自動準備                                                    |
+| `MINETENANT_MIGRATION_PENDING`               | 履歴にないDB変更がコードに登録済み                                         | ローカルでは`npm run dev`がversion順に適用                                             |
+| `MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE` | 商品状態のdata・schema・trigger前提が不一致                                | 書き込みを停止してbackup。ローカルは`npm run db:bootstrap`、共有DBは管理者と前提を確認 |
+| `MINETENANT_SCHEMA_INCOMPLETE`               | 適用済み履歴に対して必須テーブルが不足                                     | DBをバックアップして履歴と実schemaを調査                                               |
+| `MINETENANT_SCHEMA_MISMATCH`                 | 適用済み履歴に対して永続監査table・列・一意制約・triggerが不足または不一致 | DBをバックアップして履歴と実schemaを調査                                               |
 
 セットアップ、doctor、API起動はいずれも同じ診断を表示します。ドライバーの長いスタックトレースより先に、
 エラーコード・接続先・次のコマンドを確認してください。
@@ -152,7 +158,8 @@ MySQLのDDLはステートメント単位で暗黙にcommitされるため、複
 ## 検証
 
 [database/setup-local.sql](database/setup-local.sql)は専用の
-`minetenant_test`も準備します。`npm test`はこのDBだけを初期化します。
+`minetenant_test`とローカル用trigger設定も準備します。MySQL管理ユーザーで実行し、
+アプリ接続用ユーザーへ`SUPER`権限は付与しません。`npm test`はこのDBだけを初期化します。
 
 ```bash
 npm run typecheck

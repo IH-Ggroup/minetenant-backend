@@ -63,7 +63,16 @@ export async function createTestApp(overrides: Partial<AppConfig> = {}) {
     config,
     async reset() {
       await db.transaction(async (tx) => {
+        // Production rejects hard deletion for idempotent/tombstoned listings.
+        // Test cleanup clears the listing identity explicitly before deleting the
+        // disposable fixture rows instead of weakening that database invariant.
+        await tx.execute(`UPDATE products
+          SET listing_request_id = NULL, listing_request_fingerprint = NULL
+          WHERE listing_request_id IS NOT NULL
+             OR listing_request_fingerprint IS NOT NULL`);
         for (const table of [
+          'product_status_migration_request_audit',
+          'product_status_migration_product_audit',
           'hono_rate_limits',
           'hono_sessions',
           'purchase_transactions',
