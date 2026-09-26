@@ -11,7 +11,7 @@ const productPayload = {
   name: 'テスト用ツールセット',
   description: 'APIの出品フローを確認するための商品です。',
   price: 2500,
-  stock: 3,
+  stock: 1,
   category: 'tool',
   theme: 'moss',
   emoji: '🧰',
@@ -75,8 +75,8 @@ describe('Hono API on MySQL', () => {
     ).toHaveLength(6);
     expect(
       (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(2);
+        .status,
+    ).toBe('sold');
   });
 
   it('uses last-value precedence for duplicate scalar and bracketed query fields', async () => {
@@ -95,17 +95,17 @@ describe('Hono API on MySQL', () => {
     const payload = { requestId: 'uppercase-route' };
     const first = await body(
       await buyer.json(
-        '/api/v1/products/PRODUCT-STOOL/purchases',
+        '/api/v1/products/PRODUCT-HOODIE/purchases',
         'POST',
         payload,
       ),
       201,
     );
-    expect(first.data.productId).toBe('product-stool');
+    expect(first.data.productId).toBe('product-hoodie');
     expect(
       await body(
         await buyer.json(
-          '/api/v1/products/PRODUCT-STOOL/purchases',
+          '/api/v1/products/PRODUCT-HOODIE/purchases',
           'POST',
           payload,
         ),
@@ -114,21 +114,21 @@ describe('Hono API on MySQL', () => {
     expect(
       await body(
         await buyer.json(
-          '/api/v1/products/product-stool/purchases',
+          '/api/v1/products/product-hoodie/purchases',
           'POST',
           payload,
         ),
       ),
     ).toEqual(first);
     expect(
-      (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(1);
+      (await body(await guest.request('/api/v1/products/product-hoodie'))).data
+        .status,
+    ).toBe('sold');
   });
 
   it('allows empty prohibited values while fixing the Minecraft purchase source', async () => {
     const payload = {
-      productId: 'product-stool',
+      productId: 'product-hoodie',
       buyerId: 'user-buyer',
       requestId: 'empty-source',
     };
@@ -179,8 +179,11 @@ describe('Hono API on MySQL', () => {
     );
   });
 
-  it('returns the same public inventory, order, numeric values, fields and UTC dates', async () => {
+  it('returns one-item status without exposing compatibility stock', async () => {
     const { data } = await body(await guest.request('/api/v1/products'));
+    expect(
+      data.every((product: Record<string, unknown>) => !('stock' in product)),
+    ).toBe(true);
     expect(data.map((product: { id: string }) => product.id)).toEqual([
       'product-hoodie',
       'product-stool',
@@ -200,7 +203,7 @@ describe('Hono API on MySQL', () => {
       description:
         '天然木の表情を残して仕上げた小さなスツールです。椅子としても飾り台としても使えます。',
       price: 4200,
-      stock: 2,
+      status: 'sold',
       category: 'interior',
       theme: 'forest',
       emoji: '🪵',
@@ -211,8 +214,8 @@ describe('Hono API on MySQL', () => {
     ).toEqual({ data });
     expect(
       data.find((product: { id: string }) => product.id === 'product-notebook')
-        .stock,
-    ).toBe(0);
+        .status,
+    ).toBe('sold');
     await expectStatus(await guest.request('/api/v1/products/missing'), 404);
   });
 
@@ -299,10 +302,17 @@ describe('Hono API on MySQL', () => {
       201,
     );
     expect(created.data).toMatchObject({
-      ...productPayload,
+      name: productPayload.name,
+      description: productPayload.description,
+      price: productPayload.price,
+      category: productPayload.category,
+      theme: productPayload.theme,
+      emoji: productPayload.emoji,
+      status: 'available',
       sellerId: 'user-buyer',
       storeId: 'store-yamada',
     });
+    expect(created.data).not.toHaveProperty('stock');
     expect(created.data.id).toEqual(expect.any(String));
     expect(
       await body(await guest.request(`/api/v1/products/${created.data.id}`)),
@@ -311,23 +321,24 @@ describe('Hono API on MySQL', () => {
     expect(listed.data[0].id).toBe(created.data.id);
   });
 
-  it('accepts explicit owner IDs and signed integer strings', async () => {
+  it('accepts explicit owner IDs and a signed one-item stock string', async () => {
     const result = await body(
       await seller.json('/api/v1/products', 'POST', {
         ...productPayload,
         storeId: 'store-mine',
         sellerId: 'user-seller',
         price: '2500',
-        stock: '3',
+        stock: '+1',
       }),
       201,
     );
     expect(result.data).toMatchObject({
       price: 2500,
-      stock: 3,
+      status: 'available',
       storeId: 'store-mine',
       sellerId: 'user-seller',
     });
+    expect(result.data).not.toHaveProperty('stock');
   });
 
   it('rejects invalid listing fields together without storing anything', async () => {
@@ -370,7 +381,7 @@ describe('Hono API on MySQL', () => {
       description: '文'.repeat(2000),
       emoji: '🧰'.repeat(16),
       price: 99999999,
-      stock: 99999,
+      stock: 1,
     };
     await expectStatus(
       await seller.json('/api/v1/products', 'POST', valid),
@@ -382,7 +393,7 @@ describe('Hono API on MySQL', () => {
       description: '文'.repeat(2001),
       emoji: '🧰'.repeat(17),
       price: 100000000,
-      stock: 100000,
+      stock: 2,
     };
     const result = await body(
       await seller.json('/api/v1/products', 'POST', invalid),
@@ -391,6 +402,23 @@ describe('Hono API on MySQL', () => {
     for (const field of ['name', 'description', 'emoji', 'price', 'stock'])
       expect(result.errors).toHaveProperty(field);
   });
+
+  it.each([0, 2, 5, 99_999])(
+    'rejects legacy stock=%i instead of silently changing the requested quantity',
+    async (stock) => {
+      const result = await body(
+        await seller.json('/api/v1/products', 'POST', {
+          ...productPayload,
+          stock,
+        }),
+        422,
+      );
+      expect(result.errors).toHaveProperty('stock');
+      expect(
+        (await body(await guest.request('/api/v1/products'))).data,
+      ).toHaveLength(6);
+    },
+  );
 
   it('rejects another seller identity or another store even when omitted identity is valid', async () => {
     const forged = await body(
@@ -477,8 +505,8 @@ describe('Hono API on MySQL', () => {
     );
     expect(
       (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(2);
+        .status,
+    ).toBe('sold');
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data
         .points,
@@ -497,9 +525,9 @@ describe('Hono API on MySQL', () => {
     });
   });
 
-  it('purchases with shared stock, 100 store points, fixed price and paid status', async () => {
+  it('purchases one available item, adds 100 store points and marks it sold', async () => {
     const result = await body(
-      await buyer.json('/api/v1/products/product-stool/purchases', 'POST', {
+      await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
         buyerId: 'user-buyer',
         source: 'web',
         requestId: 'web-purchase',
@@ -507,11 +535,11 @@ describe('Hono API on MySQL', () => {
       201,
     );
     expect(result.data).toMatchObject({
-      productId: 'product-stool',
+      productId: 'product-hoodie',
       buyerId: 'user-buyer',
       sellerId: 'user-seller',
       source: 'web',
-      amount: 4200,
+      amount: 6800,
       status: 'paid',
     });
     expect(Object.keys(result.data).sort()).toEqual(
@@ -527,9 +555,9 @@ describe('Hono API on MySQL', () => {
       ].sort(),
     );
     expect(
-      (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(1);
+      (await body(await guest.request('/api/v1/products/product-hoodie'))).data
+        .status,
+    ).toBe('sold');
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data,
     ).toMatchObject({ points: 520, level: 3 });
@@ -537,7 +565,7 @@ describe('Hono API on MySQL', () => {
 
   it('uses session defaults and deduplicates retries across both web purchase URLs', async () => {
     const payload = {
-      productId: 'product-stool',
+      productId: 'product-hoodie',
       requestId: 'web-alias-request',
     };
     const first = await body(
@@ -548,7 +576,7 @@ describe('Hono API on MySQL', () => {
       await buyer.json('/api/v1/purchases', 'POST', payload),
     );
     const alternate = await body(
-      await buyer.json('/api/v1/products/product-stool/purchases', 'POST', {
+      await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
         requestId: payload.requestId,
       }),
     );
@@ -559,9 +587,9 @@ describe('Hono API on MySQL', () => {
       source: 'web',
     });
     expect(
-      (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(1);
+      (await body(await guest.request('/api/v1/products/product-hoodie'))).data
+        .status,
+    ).toBe('sold');
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data
         .points,
@@ -574,23 +602,23 @@ describe('Hono API on MySQL', () => {
   it('rejects requestId reuse for a different product, buyer or source without stock changes', async () => {
     await expectStatus(
       await buyer.json('/api/v1/purchases', 'POST', {
-        productId: 'product-stool',
+        productId: 'product-hoodie',
         requestId: 'shared-id',
       }),
       201,
     );
     const requests = [
       buyer.json('/api/v1/purchases', 'POST', {
-        productId: 'product-hoodie',
+        productId: 'product-stool',
         requestId: 'shared-id',
       }),
       guest.json('/api/v1/minecraft/purchases', 'POST', {
-        productId: 'product-stool',
+        productId: 'product-hoodie',
         buyerId: 'user-buyer',
         requestId: 'shared-id',
       }),
       guest.json('/api/v1/minecraft/purchases', 'POST', {
-        productId: 'product-stool',
+        productId: 'product-hoodie',
         buyerId: 'user-seller',
         requestId: 'shared-id',
       }),
@@ -599,8 +627,8 @@ describe('Hono API on MySQL', () => {
       expect((await body(response, 409)).code).toBe('REQUEST_ID_CONFLICT');
     expect(
       (await body(await guest.request('/api/v1/products/product-hoodie'))).data
-        .stock,
-    ).toBe(3);
+        .status,
+    ).toBe('sold');
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data
         .points,
@@ -610,7 +638,7 @@ describe('Hono API on MySQL', () => {
   it('rejects self-purchase and sold-out items without inventory or growth changes', async () => {
     const self = await body(
       await seller.json('/api/v1/purchases', 'POST', {
-        productId: 'product-stool',
+        productId: 'product-hoodie',
         requestId: 'self',
       }),
       422,
@@ -629,13 +657,13 @@ describe('Hono API on MySQL', () => {
       ).code,
     ).toBe('OUT_OF_STOCK');
     expect(
-      (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(2);
+      (await body(await guest.request('/api/v1/products/product-hoodie'))).data
+        .status,
+    ).toBe('available');
     expect(
       (await body(await guest.request('/api/v1/products/product-notebook')))
-        .data.stock,
-    ).toBe(0);
+        .data.status,
+    ).toBe('sold');
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data
         .points,
@@ -694,7 +722,7 @@ describe('Hono API on MySQL', () => {
 
   it('keeps Minecraft purchases unauthenticated, source-fixed, idempotent and shared with web', async () => {
     const payload = {
-      productId: 'product-stool',
+      productId: 'product-hoodie',
       buyerId: 'user-buyer',
       requestId: 'minecraft-purchase',
     };
@@ -712,9 +740,9 @@ describe('Hono API on MySQL', () => {
       ),
     ).toEqual(first);
     expect(
-      (await body(await guest.request('/api/v1/products/product-stool'))).data
-        .stock,
-    ).toBe(1);
+      (await body(await guest.request('/api/v1/products/product-hoodie'))).data
+        .status,
+    ).toBe('sold');
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data,
     ).toMatchObject({ points: 520, level: 3 });
@@ -765,7 +793,7 @@ describe('Hono API on MySQL', () => {
     );
     await expectStatus(
       await buyer.json('/api/v1/purchases', 'POST', {
-        productId: 'product-stool',
+        productId: 'product-hoodie',
         requestId: 'level-five',
       }),
       201,
@@ -799,9 +827,9 @@ describe('Hono API on MySQL', () => {
     expect(dashboard.data.products[0].id).toBe('product-hoodie');
     expect(dashboard.data.stats).toEqual({
       productCount: 3,
-      availableProductCount: 2,
-      soldOutProductCount: 1,
-      totalStock: 5,
+      availableProductCount: 1,
+      soldOutProductCount: 2,
+      totalStock: 1,
       salesCount: 1,
       salesAmount: 4200,
       webSalesCount: 0,
@@ -825,11 +853,24 @@ describe('Hono API on MySQL', () => {
   it('limits recent transactions to five while counting all historical statuses in sales totals', async () => {
     for (let index = 0; index < 6; index++) {
       await test.db.execute(
+        `INSERT INTO products
+          (product_id, store_id, user_id, name, description, price, stock,
+           status, category, theme, emoji, created_at, updated_at)
+         VALUES (?, 'store-mine', 'user-seller', ?, '', 1000, 0,
+                 'sold', 'hobby', 'forest', '📦', ?, ?)`,
+        [
+          `history-product-${index}`,
+          `履歴商品 ${index}`,
+          `2026-08-0${index + 1} 00:00:00`,
+          `2026-08-0${index + 1} 00:00:00`,
+        ],
+      );
+      await test.db.execute(
         'INSERT INTO purchase_transactions (transaction_id, request_id, product_id, buyer_user_id, seller_user_id, source, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           `history-${index}`,
           `history-request-${index}`,
-          'product-stool',
+          `history-product-${index}`,
           'user-buyer',
           'user-seller',
           'web',

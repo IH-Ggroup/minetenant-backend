@@ -1,6 +1,9 @@
 -- 自分のPCのMySQLに、管理ユーザーで一度だけ実行してください。
 -- ローカル開発専用です。本番環境では使わないでください。
 -- 既存テーブルの削除、既存ユーザーのパスワード変更は行いません。
+-- binary log有効時も専用app userにSUPERを付与せずtriggerを作成できるようにします。
+SET GLOBAL log_bin_trust_function_creators = 1;
+
 CREATE DATABASE IF NOT EXISTS minetenant
     CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS minetenant_test

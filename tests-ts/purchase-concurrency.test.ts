@@ -30,12 +30,27 @@ describe('atomic MySQL purchases and deletion races', () => {
     });
   }
 
-  async function stock(productId: string) {
-    const rows = await test.db.query<{ stock: number }>(
-      'SELECT stock FROM products WHERE product_id = ?',
+  async function productState(productId: string) {
+    const rows = await test.db.query<{ stock: number; status: string }>(
+      'SELECT stock, status FROM products WHERE product_id = ?',
       [productId],
     );
-    return rows[0]?.stock;
+    return rows[0];
+  }
+
+  async function createAvailableProduct(
+    productId: string,
+    storeId = 'store-mine',
+    sellerId = 'user-seller',
+  ) {
+    await test.db.execute(
+      `INSERT INTO products
+        (product_id, store_id, user_id, name, description, price, stock,
+         category, theme, emoji, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '', 1000, 1, 'hobby', 'forest', '📦',
+               UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
+      [productId, storeId, sellerId, productId],
+    );
   }
 
   async function points(storeId: string) {
@@ -73,7 +88,10 @@ describe('atomic MySQL purchases and deletion races', () => {
     for (const response of responses.filter((item) => item.status === 409)) {
       expect((await response.json()).code).toBe('OUT_OF_STOCK');
     }
-    expect(await stock('product-toolbag')).toBe(0);
+    expect(await productState('product-toolbag')).toEqual({
+      stock: 0,
+      status: 'sold',
+    });
     expect(await points('store-yamada')).toBe(140);
     expect(await transactions()).toHaveLength(2);
   });
@@ -92,14 +110,18 @@ describe('atomic MySQL purchases and deletion races', () => {
     );
     expect(new Set(payloads.map((payload) => payload.data.id)).size).toBe(1);
     expect(await transactions('concurrent-retry')).toHaveLength(1);
-    expect(await stock('product-toolbag')).toBe(0);
+    expect(await productState('product-toolbag')).toEqual({
+      stock: 0,
+      status: 'sold',
+    });
     expect(await points('store-yamada')).toBe(140);
   });
 
   it('resolves simultaneous requestId reuse across different products as one purchase and one conflict', async () => {
+    await createAvailableProduct('conflict-second');
     const responses = await Promise.all([
       purchase('product-hoodie', 'user-buyer', 'concurrent-conflict'),
-      purchase('product-stool', 'user-buyer', 'concurrent-conflict'),
+      purchase('conflict-second', 'user-buyer', 'concurrent-conflict'),
     ]);
     expect(responses.map((response) => response.status).sort()).toEqual([
       201, 409,
@@ -110,22 +132,32 @@ describe('atomic MySQL purchases and deletion races', () => {
     ).toBe('REQUEST_ID_CONFLICT');
     const history = await transactions('concurrent-conflict');
     expect(history).toHaveLength(1);
-    expect(
-      (await stock('product-hoodie'))! + (await stock('product-stool'))!,
-    ).toBe(4);
+    const states = await Promise.all([
+      productState('product-hoodie'),
+      productState('conflict-second'),
+    ]);
+    expect(states.reduce((total, state) => total + state!.stock, 0)).toBe(1);
     expect(await points('store-mine')).toBe(520);
     const winner = history[0]!.product_id;
-    expect(await stock(winner)).toBe(winner === 'product-hoodie' ? 2 : 1);
+    expect(await productState(winner)).toEqual({ stock: 0, status: 'sold' });
   });
 
   it('serializes growth for different products belonging to the same store without lost points', async () => {
+    await createAvailableProduct('parallel-first');
+    await createAvailableProduct('parallel-second');
     const responses = await Promise.all([
-      purchase('product-hoodie', 'user-buyer', 'parallel-hoodie'),
-      purchase('product-stool', 'user-buyer', 'parallel-stool'),
+      purchase('parallel-first', 'user-buyer', 'parallel-first'),
+      purchase('parallel-second', 'user-buyer', 'parallel-second'),
     ]);
     for (const response of responses) await expectStatus(response, 201);
-    expect(await stock('product-hoodie')).toBe(2);
-    expect(await stock('product-stool')).toBe(1);
+    expect(await productState('parallel-first')).toEqual({
+      stock: 0,
+      status: 'sold',
+    });
+    expect(await productState('parallel-second')).toEqual({
+      stock: 0,
+      status: 'sold',
+    });
     expect(await points('store-mine')).toBe(620);
     const [store] = await test.db.query<{ level: number }>(
       "SELECT level FROM stores WHERE store_id = 'store-mine'",
@@ -147,12 +179,15 @@ describe('atomic MySQL purchases and deletion races', () => {
     `);
     try {
       const failed = await purchase(
-        'product-stool',
+        'product-hoodie',
         'user-buyer',
         'forced-sql-failure',
       );
       expect(failed.status).toBe(500);
-      expect(await stock('product-stool')).toBe(2);
+      expect(await productState('product-hoodie')).toEqual({
+        stock: 1,
+        status: 'available',
+      });
       expect(await points('store-mine')).toBe(420);
       expect(await transactions('forced-sql-failure')).toHaveLength(0);
       expect(await transactions()).toHaveLength(1);
@@ -160,10 +195,13 @@ describe('atomic MySQL purchases and deletion races', () => {
       await test.db.execute('DROP TRIGGER hono_test_fail_purchase');
     }
     await expectStatus(
-      await purchase('product-stool', 'user-buyer', 'forced-sql-failure'),
+      await purchase('product-hoodie', 'user-buyer', 'forced-sql-failure'),
       201,
     );
-    expect(await stock('product-stool')).toBe(1);
+    expect(await productState('product-hoodie')).toEqual({
+      stock: 0,
+      status: 'sold',
+    });
     expect(await points('store-mine')).toBe(520);
   });
 
@@ -178,10 +216,13 @@ describe('atomic MySQL purchases and deletion races', () => {
     `);
     try {
       expect(
-        (await purchase('product-stool', 'user-buyer', 'growth-failure'))
+        (await purchase('product-hoodie', 'user-buyer', 'growth-failure'))
           .status,
       ).toBe(500);
-      expect(await stock('product-stool')).toBe(2);
+      expect(await productState('product-hoodie')).toEqual({
+        stock: 1,
+        status: 'available',
+      });
       expect(await points('store-mine')).toBe(420);
       expect(await transactions('growth-failure')).toHaveLength(0);
     } finally {
@@ -199,14 +240,17 @@ describe('atomic MySQL purchases and deletion races', () => {
     const history = await transactions('delete-race');
     if (bought.status === 201) {
       await expectStatus(deleted, 409);
-      expect(await stock('product-hoodie')).toBe(2);
+      expect(await productState('product-hoodie')).toEqual({
+        stock: 0,
+        status: 'sold',
+      });
       expect(history).toHaveLength(1);
       expect(await points('store-mine')).toBe(520);
     } else {
       await expectStatus(deleted, 204);
       // A missing product is 422 during Minecraft input validation or 404 after row locking.
       expect([404, 422]).toContain(bought.status);
-      expect(await stock('product-hoodie')).toBeUndefined();
+      expect(await productState('product-hoodie')).toBeUndefined();
       expect(history).toHaveLength(0);
       expect(await points('store-mine')).toBe(420);
     }

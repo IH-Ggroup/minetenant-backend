@@ -33,6 +33,8 @@ const APPLICATION_TABLES = [
   'stores',
   'products',
   'purchase_transactions',
+  'product_status_migration_product_audit',
+  'product_status_migration_request_audit',
   'hono_sessions',
   'hono_rate_limits',
 ] as const;
@@ -105,6 +107,8 @@ async function dropAllTables(db: Database): Promise<void> {
   await dropViews(db, TEST_VIEWS);
   await dropTables(db, [
     ...TEST_TABLES,
+    'product_status_migration_request_audit',
+    'product_status_migration_product_audit',
     'purchase_transactions',
     'hono_sessions',
     'products',
@@ -164,6 +168,8 @@ async function applicationSnapshot(db: Database) {
     stores: 'store_id',
     products: 'product_id',
     purchase_transactions: 'transaction_id',
+    product_status_migration_product_audit: 'product_id',
+    product_status_migration_request_audit: 'transaction_id',
     hono_sessions: 'session_id',
     hono_rate_limits: 'key_hash',
   } satisfies Record<(typeof APPLICATION_TABLES)[number], string>;
@@ -190,7 +196,8 @@ async function prepareLegacySchema(
     await db.execute(
       `INSERT INTO users
         (id, name, email, password, role, role_label, avatar_initial, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?),
+              (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         'legacy-user',
         '移行対象ユーザー',
@@ -199,6 +206,15 @@ async function prepareLegacySchema(
         'seller',
         '販売者',
         '移',
+        timestamp,
+        timestamp,
+        'legacy-buyer',
+        '移行対象購入者',
+        'legacy-buyer@example.com',
+        'legacy-buyer-password-hash',
+        'buyer',
+        '購入者',
+        '買',
         timestamp,
         timestamp,
       ],
@@ -246,7 +262,7 @@ async function prepareLegacySchema(
         'legacy-transaction',
         'legacy-request',
         'legacy-product',
-        'legacy-user',
+        'legacy-buyer',
         'legacy-user',
         'web',
         2500,
@@ -468,9 +484,13 @@ describe('versioned MySQL migrations', () => {
 
     await migrate(test.db);
 
-    expect(await renamedBusinessDataSnapshot(test.db, 'final')).toEqual(
-      businessDataBefore,
-    );
+    expect(await renamedBusinessDataSnapshot(test.db, 'final')).toEqual({
+      ...businessDataBefore,
+      products: businessDataBefore.products.map((product) => ({
+        ...product,
+        stock: 0,
+      })),
+    });
     expect(await renamedColumnDefinitions(test.db, 'final')).toEqual(
       columnDefinitionsBefore,
     );
@@ -493,13 +513,18 @@ describe('versioned MySQL migrations', () => {
         user_id: 'legacy-user',
         store_user_id: 'legacy-user',
         transaction_id: 'legacy-transaction',
-        buyer_user_id: 'legacy-user',
+        buyer_user_id: 'legacy-buyer',
         seller_user_id: 'legacy-user',
       },
     ]);
     expect(
       await test.db.query('SELECT session_id, user_id FROM hono_sessions'),
     ).toEqual([{ session_id: 'a'.repeat(64), user_id: 'legacy-user' }]);
+    expect(
+      await test.db.query(
+        "SELECT status, stock FROM products WHERE product_id = 'legacy-product'",
+      ),
+    ).toEqual([{ status: 'sold', stock: 0 }]);
   });
 
   it('upgrades Laravel-generated legacy index and foreign-key names', async () => {
@@ -539,13 +564,13 @@ describe('versioned MySQL migrations', () => {
       migrations.map(({ version }) => version),
     );
     expect(await renamedBusinessDataSnapshot(test.db, 'final')).toMatchObject({
-      users: [{ user_id: 'legacy-user' }],
+      users: [{ user_id: 'legacy-buyer' }, { user_id: 'legacy-user' }],
       stores: [{ store_id: 'legacy-store', user_id: 'legacy-user' }],
       products: [{ product_id: 'legacy-product', user_id: 'legacy-user' }],
       transactions: [
         {
           transaction_id: 'legacy-transaction',
-          buyer_user_id: 'legacy-user',
+          buyer_user_id: 'legacy-buyer',
           seller_user_id: 'legacy-user',
         },
       ],
@@ -829,12 +854,6 @@ describe('versioned MySQL migrations', () => {
       ],
       [
         'purchase_transactions',
-        'purchase_transactions_product_id_index',
-        1,
-        'product_id',
-      ],
-      [
-        'purchase_transactions',
         'purchase_transactions_source_index',
         1,
         'source',
@@ -860,6 +879,25 @@ describe('versioned MySQL migrations', () => {
     expect(
       index('products', 'products_user_id_created_at_index'),
     ).toMatchObject({ nonUnique: 1, columns: 'user_id,created_at' });
+    expect(
+      index('products', 'products_user_id_listing_request_id_unique'),
+    ).toMatchObject({
+      nonUnique: 0,
+      columns: 'user_id,listing_request_id',
+    });
+    expect(
+      index('products', 'products_product_id_user_id_unique'),
+    ).toMatchObject({ nonUnique: 0, columns: 'product_id,user_id' });
+    expect(index('products', 'products_public_list_index')).toMatchObject({
+      nonUnique: 1,
+      columns: 'deleted_at,created_at',
+    });
+    expect(
+      index('purchase_transactions', 'purchase_transactions_product_id_unique'),
+    ).toMatchObject({ nonUnique: 0, columns: 'product_id' });
+    expect(
+      index('purchase_transactions', 'purchase_transactions_product_seller'),
+    ).toMatchObject({ nonUnique: 1, columns: 'product_id,seller_user_id' });
     expect(
       index(
         'purchase_transactions',
@@ -893,7 +931,7 @@ describe('versioned MySQL migrations', () => {
           AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
         WHERE k.CONSTRAINT_SCHEMA = DATABASE()
           AND k.REFERENCED_TABLE_NAME IS NOT NULL
-        ORDER BY k.CONSTRAINT_NAME`,
+        ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION`,
     );
     expect(foreignKeys).toEqual([
       {
@@ -934,6 +972,22 @@ describe('versioned MySQL migrations', () => {
         columnName: 'product_id',
         referencedTableName: 'products',
         referencedColumnName: 'product_id',
+        deleteRule: 'RESTRICT',
+      },
+      {
+        constraintName: 'purchase_transactions_product_seller_foreign',
+        tableName: 'purchase_transactions',
+        columnName: 'product_id',
+        referencedTableName: 'products',
+        referencedColumnName: 'product_id',
+        deleteRule: 'RESTRICT',
+      },
+      {
+        constraintName: 'purchase_transactions_product_seller_foreign',
+        tableName: 'purchase_transactions',
+        columnName: 'seller_user_id',
+        referencedTableName: 'products',
+        referencedColumnName: 'user_id',
         deleteRule: 'RESTRICT',
       },
       {

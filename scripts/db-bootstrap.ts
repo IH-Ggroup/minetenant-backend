@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { stdin, stdout } from 'node:process';
 import { pathToFileURL } from 'node:url';
 import { config as loadEnv } from 'dotenv';
-import mysql, { type Connection } from 'mysql2/promise';
+import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { readConfig, type AppConfig } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
 import { formatErrorForLog } from '../src/diagnostics.js';
@@ -30,6 +30,11 @@ const SERVER_REQUIREMENTS: SchemaRequirements = {
   tables: {},
   uniqueKeys: [],
 };
+
+interface TriggerSupportRow extends RowDataPacket {
+  logBin: number | string;
+  trustFunctionCreators: number | string;
+}
 
 class BootstrapFailure extends Error {
   constructor(message: string) {
@@ -233,6 +238,35 @@ export async function provisionLocalDatabase(
     throw error;
   }
   try {
+    const [triggerSupportRows] = await connection.query<TriggerSupportRow[]>(
+      `SELECT @@GLOBAL.log_bin AS logBin,
+              @@GLOBAL.log_bin_trust_function_creators AS trustFunctionCreators`,
+    );
+    const triggerSupport = triggerSupportRows[0];
+    if (
+      Number(triggerSupport?.logBin) === 1 &&
+      Number(triggerSupport?.trustFunctionCreators) !== 1
+    ) {
+      try {
+        // MySQL 8 otherwise requires deprecated SUPER for trigger creation.
+        // Keep SUPER away from the app account and let the local administrator
+        // enable the narrower setting before app-user migrations run.
+        await connection.query(
+          'SET GLOBAL log_bin_trust_function_creators = 1',
+        );
+      } catch (error) {
+        if (
+          hasCode(error, 'ER_SPECIFIC_ACCESS_DENIED_ERROR') ||
+          hasCode(error, 'ER_ACCESS_DENIED_ERROR')
+        ) {
+          throw new BootstrapFailure(
+            'MySQL管理ユーザーにtrigger作成を有効化する権限がありません。SYSTEM_VARIABLES_ADMIN権限のある管理ユーザーを指定してください。',
+          );
+        }
+        throw error;
+      }
+    }
+
     const readiness = await inspectDatabaseReadiness(
       readinessQuery(connection),
       config.dbDatabase,
