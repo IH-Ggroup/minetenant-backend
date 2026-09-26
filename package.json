@@ -20,8 +20,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:seed": "tsx scripts/seed.ts",
     "lint": "eslint src scripts tests-ts",
-    "format": "prettier --write src scripts tests-ts package.json package-lock.json tsconfig*.json vitest.config.ts eslint.config.js .prettierrc.json README.md docs/api.md docs/database.md",
-    "format:check": "prettier --check src scripts tests-ts package.json package-lock.json tsconfig*.json vitest.config.ts eslint.config.js .prettierrc.json README.md docs/api.md docs/database.md"
+    "format": "prettier --write src scripts tests-ts package.json package-lock.json tsconfig*.json vitest.config.ts eslint.config.js .prettierrc.json README.md docs/*.md",
+    "format:check": "prettier --check src scripts tests-ts package.json package-lock.json tsconfig*.json vitest.config.ts eslint.config.js .prettierrc.json README.md docs/*.md"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",

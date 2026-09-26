@@ -4,26 +4,34 @@
 動作し、MySQLへデータを保存します。JSONのキーはフロントのTypeScript型に合わせて
 camelCaseで返します。
 
-> **B-CONTRACT-01 / 02の読み方**
+> **契約節の読み方**
 > 「現行から確定契約への変更」と「一点物Product」から「Web購入」までの各節は、
-> B-PRODUCT / B-BUY / B-XP / B-BUILD Issueが実装する最終契約です。2026-09-19時点の`develop`
-> (`da99a9f`)はまだ`stock`モデルで、店舗pointsも販売店舗だけへ加算するため、実装完了までは
-> 動作と異なります。それ以外の認証、取引履歴、Fabric APIの認証・pathは現行実装の説明であり、
-> このIssueでは契約を変更しません。ただし共有serializerが返すProductの形、店舗の成長表示、
-> 出品・購入に伴う店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
+> B-CONTRACT-01 / 02で確定した、B-PRODUCT / B-BUY / B-XP / B-BUILD Issueが実装する
+> 最終契約です。2026-09-26時点の`develop` (`46235a9`)はB-PRODUCT-01 #49を取込み済みで、
+> Product responseは`status`へ移行しました。一方、出品・購入writerは物理`stock`との互換期間中で、
+> 店舗pointsも販売店舗だけへ加算するため、後続Issue完了までは一部の動作が異なります。
+>
+> 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。同じ`develop`の
+> runtimeはまだemail / `name`認証です。B-AUTH-01〜12、B-AUTH-CUTOVER #118、
+> B-AUTH-SESSION #119、B-DB-STRICT-MODE #120、B-AUTH-CONTRACT-CUTOVER #121、
+> Frontend F-AUTH-01の段階移行中は、
+> この節の「移行順と互換期間」を併せて参照してください。取引履歴とFabric APIの認証・pathは
+> 現行実装の説明です。ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
+> 店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
 
 ## 現行から確定契約への変更
 
-| 対象           | 現行`develop`                                  | 確定契約                                                                |
-| -------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
-| Product        | `stock: number`                                | `status: "available" \| "sold"`。`stock`は返さない                      |
-| 一覧・詳細     | `stock`を含み、売り切れも公開                  | `status`を含み、`available` / `sold`を公開。soft delete済みは除外       |
-| 出品request    | 商品項目 + 必須`stock`。所有者・店舗も送信可能 | `requestId` + 数量なしの商品項目だけ。所有者・店舗・初期状態はAPIが確定 |
-| 出品の再送     | 毎回別Productを作成                            | 同じ利用者・ID・内容は同じProduct。異なる内容は409                      |
-| Web購入request | 2つのpathで`buyerId` / `source`も送信可能      | 正規pathは本文`requestId`だけ。互換pathは`productId` + `requestId`だけ  |
-| 購入時の状態   | `stock`を1減らす                               | `available`から`sold`へ一度だけ変更                                     |
-| 店舗points     | 販売店舗へ100 points                           | 出品店舗へ10、buyer店舗へ50、販売店舗へ100                              |
-| 店舗level      | 境界と表示計算が実装に直書き                   | 境界、最大Lv、最大到達後、表示値、丸めを共通契約として固定              |
+| 対象           | 現行`develop`                                        | 確定契約                                                                |
+| -------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
+| Product        | `status: "available" \| "sold"`。物理`stock`は互換用 | 同じresponseを維持し、物理`stock`も削除                                 |
+| 一覧・詳細     | `status`を含み売り切れも公開。soft deleteは未接続    | `available` / `sold`を公開し、soft delete済みは除外                     |
+| 出品request    | 商品項目 + 必須`stock`。所有者・店舗も送信可能       | `requestId` + 数量なしの商品項目だけ。所有者・店舗・初期状態はAPIが確定 |
+| 出品の再送     | 毎回別Productを作成                                  | 同じ利用者・ID・内容は同じProduct。異なる内容は409                      |
+| Web購入request | 2つのpathで`buyerId` / `source`も送信可能            | 正規pathは本文`requestId`だけ。互換pathは`productId` + `requestId`だけ  |
+| 購入時の状態   | `stock`を1減らし互換triggerが`status`を同期          | `available`から`sold`へ一度だけ変更                                     |
+| 店舗points     | 販売店舗へ100 points                                 | 出品店舗へ10、buyer店舗へ50、販売店舗へ100                              |
+| 店舗level      | 境界と表示計算が実装に直書き                         | 境界、最大Lv、最大到達後、表示値、丸めを共通契約として固定              |
+| Webアカウント  | emailで認証し、`name`を表示                          | `username`で認証し、`displayName`を表示。emailは最終schemaに持たない    |
 
 DB列、制約、index、`stock=0 / 1 / 2以上`の移行規則は
 [`docs/database.md`](./database.md)を正本とします。
@@ -193,7 +201,7 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 | POST   | `/auth/login`                     | 不要           | ログイン、200 `data: User`                                   |
 | GET    | `/auth/me`                        | 必須           | 現在のユーザー、200 `data: User`                             |
 | POST   | `/auth/logout`                    | 必須           | セッション破棄、204                                          |
-| GET    | `/users`                          | 必須           | 開発用ユーザー一覧、200 `data: User[]`                       |
+| GET    | `/users`                          | 必須           | 現行deprecated一覧、200。#108でrouteごと削除                 |
 | GET    | `/products`                       | 不要           | 商品一覧・検索・店舗絞り込み、200 `data: Product[]`          |
 | GET    | `/products/{productId}`           | 不要           | 商品詳細、200 `data: Product`                                |
 | POST   | `/products`                       | 必須           | 本人の店舗へ冪等に出品、初回201・再送200 `data: Product`     |
@@ -211,6 +219,342 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 
 ## 認証とCSRF
 
+この節の「完成時契約」はB-CONTRACT-07の正本です。2026-09-26時点の`develop`はまだ
+email / `name`認証なので、実装・deploy時は末尾の「移行順と互換期間」も参照してください。
+
+### 完成時のSessionとCSRF
+
+最初に`GET /api/v1/auth/csrf-cookie`を`credentials: 'include'`付きで呼びます。正常時は
+`204 No Content`で本文を返しません。有効なsessionがなければ匿名のDB sessionを作り、
+既存sessionがあれば認証状態を保ったまま期限を延長します。HttpOnlyのsession Cookieと、
+JavaScriptから読める`XSRF-TOKEN` Cookieを設定します。セッションCookieの既定名は
+`minetenant_hono_session`です。両Cookieは`Path=/`で、既定はhost-only、`SameSite=Lax`です。
+公開HTTPS環境ではSecureを必須にします。
+
+匿名sessionはこのCSRF bootstrapでだけ遅延作成します。Cookieなしのpublic GET / HEAD、401になる
+認証必須GET / HEAD、404、OPTIONS、Minecraft routeではDB sessionもCookieも作りません。有効sessionなしの
+書込みは新しいsessionを作らず419です。新規匿名sessionの作成はclient IPごとの60秒固定windowで10件までとし、
+11件目は429です。有効sessionを同じCookieで再利用するCSRF再取得は作成limitを消費しません。
+IPはSHA-256済みbucket keyだけを保存し、通常responseに`X-RateLimit-Limit / Remaining`、429に
+`Retry-After / X-RateLimit-Reset`も返してCORSで公開します。このhardeningはB-AUTH-SESSION #119が
+B-AUTH-CUTOVER #118より前に実装します。
+
+`POST /auth/register`、`POST /auth/login`、`POST /auth/logout`は認証前の操作を含めて
+CSRF検証の対象です。`XSRF-TOKEN`をURLデコードした値を`X-XSRF-TOKEN`ヘッダーへ設定し、
+session Cookieと一緒に送信します。不一致・欠落は`419`です。
+
+```json
+{
+  "message": "CSRF token mismatch."
+}
+```
+
+registerとloginではsession IDとCSRF tokenの両方を再生成し、直前のsessionを同じDB transactionで
+無効化します。logoutは認証済みsessionを削除してsession / XSRF Cookieを期限切れにし、新しい匿名
+sessionを作りません。次の書込み前にCSRF bootstrapを再取得します。`GET /auth/me`はGETなので
+CSRF token不要ですが、匿名・期限切れsessionは
+`401`です。session期限は設定値（既定120分）のsliding expirationとし、認証responseは
+`Cache-Control: no-store, private`にします。
+
+session IDとCSRF tokenは`Set-Cookie`だけで渡し、JSON bodyやapplication logへ含めません。
+password、passwordConfirmation、password hashもresponseやlogへ含めません。これらをlocalStorage、
+sessionStorageへ保存せず、CSRF tokenは書き込みのたびにCookieから読み直します。419を受けた
+フロントはCSRF Cookieを再取得できますが、register / login / logoutを自動再送せず、利用者へ
+再操作を求めます。認証情報をBearer tokenとして送る方式ではありません。
+
+Web session middlewareは`/api/v1/minecraft/**`へ適用しません。Minecraftへusername、
+displayName、password、Cookie、CSRF tokenを渡さず、Web利用者との連携には内部
+`users.user_id`だけを使います。
+
+### 完成時のUser DTO
+
+register、login、meは同じUser DTOを`{ "data": User }`で返します。キーは次の7個だけです。
+
+```ts
+type SessionUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  role: 'buyer' | 'seller';
+  roleLabel: '購入者' | '出品者';
+  avatarInitial: string;
+  storeId: string | null;
+};
+```
+
+- `id`はDBの`users.user_id`、`storeId`は`stores.store_id`を変換した公開名です。
+  `user_id`や`userId`は追加しません。
+- `roleLabel`は`buyer`なら`購入者`、`seller`なら`出品者`です。旧DBの`role_label`は使いません。
+  未知のroleを別labelへ黙ってfallbackせず、DB不整合として扱います。
+- `avatarInitial`はtrim済み`displayName`の先頭extended grapheme clusterを、Node.jsの
+  `Intl.Segmenter`（`granularity: 'grapheme'`）で導出します。フロントは再計算しません。
+  例えば`👩🏽‍💻 開発者`の`avatarInitial`は`👩🏽‍💻`です。
+- `storeId`は店舗がない既存利用者では`null`です。register成功時は初期店舗を同時作成するため、
+  必ずstringです。フロントは`null`なら出品・店舗管理の導線を隠し、URL直入力時もrouteと
+  API呼び出しの両方をblockします。
+- email、汎用的な`name`、password、passwordHash、session情報は完成時DTOへ含めません。
+
+### 完成時の入力とvalidation
+
+registerとloginは`application/json`または`application/*+json`だけを受理します。Content-Typeの
+欠落、form-urlencoded、multipart、その他のmedia typeは`415 Unsupported Media Type`です。
+
+```json
+{
+  "message": "Content-Type must be application/json."
+}
+```
+
+空のJSON bodyは`{}`としてfield validationの422、壊れたJSONは400です。`username`、`password`、
+送信時の`passwordConfirmation`はJSON stringだけを受理します。`displayName`だけは省略・string・
+`null`を受理し、その他の型は対応fieldの422です。usernameとdisplayNameの前後空白除去はECMAScriptの
+`String.prototype.trim()`と同じ文字集合を使い、文字数はUnicode code point数で数えます。
+全API共通の1 MiB body limitを超えた場合は最初に413となります。その上限内ではCSRF header検証を
+media type・JSON parseより先に行うため、token欠落・不一致はbodyの形式にかかわらず419です。
+共通のbody parserが先に別の文字集合を除去しないよう、B-AUTH-04 #101とB-AUTH-06 #103のrouteが
+`username`、`displayName`、`password`、`passwordConfirmation`の未加工値をB-AUTH-02 #99の
+認証用validatorへ渡します。
+特にcamelCaseの`passwordConfirmation`もpasswordと同じくtrim対象外です。
+
+| field                  | endpoint         | 正規化と規則                                                                              |
+| ---------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
+| `username`             | register / login | 必須。前後のUnicode空白を除去して小文字化後、`^[a-z0-9_]{3,32}$`。正規化後の値で一意判定  |
+| `displayName`          | register         | 任意。前後のUnicode空白を除去して1〜120文字。省略、`null`、空白だけなら正規化済みusername |
+| `password`             | register / login | 必須。正規化・trimをせず8文字以上、UTF-8で72 bytes以下、NUL禁止                           |
+| `passwordConfirmation` | register         | 任意。送信された場合は正規化・trimをせず、未加工の`password`と完全一致。保存・記録しない  |
+
+公式WebフロントではpasswordConfirmationを必須入力にして常に送ります。APIではCLI等との互換のため
+省略可能です。パスワード前後の空白も値の一部であり、勝手に除去しません。保存済みbcrypt hashは
+60文字の`$2b$`または`$2y$`、cost 04〜16だけを受理します。`$2y$`は`$2b$`へprefix変換して
+`bcrypt.getRounds`と`bcrypt.compare`へ渡し、保存済みcostが設定roundsより低い場合だけlogin成功後に
+`$2b$`へrehashします。保存済みcostの方が高い場合は弱い設定へ下げません。`$2a$`や壊れたhashは
+移行preflightで停止し、login中に例外を出させません。
+
+主な境界例は次のとおりです。
+
+| 入力・状態                                               | 結果                                    |
+| -------------------------------------------------------- | --------------------------------------- |
+| username `" Demo_User "`                                 | `demo_user`として受理                   |
+| username `abc` / 32文字の小文字ASCII                     | 受理                                    |
+| username `ab` / 33文字                                   | 422 `errors.username`                   |
+| username `demo-user` / `利用者` / 内部空白               | 422 `errors.username`                   |
+| username `demo` / `seller`                               | 予約済みとして422 `errors.username`     |
+| 既存`demo_user`に対する`" DEMO_USER "`                   | 正規化後重複として422 `errors.username` |
+| password 7文字 / 8文字                                   | 422 / 受理                              |
+| ASCII password 72 bytes / 73 bytes                       | 受理 / 422 `errors.password`            |
+| passwordにJSON escapeの`\u0000`を含む                    | 422 `errors.password`                   |
+| displayName 1文字 / 120文字 / 121文字                    | 受理 / 受理 / 422 `errors.displayName`  |
+| confirmation省略 / 完全一致                              | 受理                                    |
+| passwordとconfirmationが同じ`" password "`               | 空白を値の一部として受理                |
+| `password`が`"password"`、confirmationが`" password "`   | 422 `errors.passwordConfirmation`       |
+| confirmationの大文字小文字だけが異なる                   | 422 `errors.passwordConfirmation`       |
+| username / password / confirmationがnull・number・object | 対応fieldの422                          |
+| displayNameがnumber・object                              | 422 `errors.displayName`                |
+
+### 完成時の新規登録
+
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
+X-XSRF-TOKEN: CookieをURLデコードした値
+```
+
+```json
+{
+  "username": " Demo_User ",
+  "displayName": "  山田 みどり  ",
+  "password": "demo-password-123",
+  "passwordConfirmation": "demo-password-123"
+}
+```
+
+displayNameの保存結果は次で固定します。
+
+| requestの`displayName` | 保存する`display_name` |
+| ---------------------- | ---------------------- |
+| `"  山田 みどり  "`    | `山田 みどり`          |
+| field省略              | `demo_user`            |
+| `null`                 | `demo_user`            |
+| `"　 "`                | `demo_user`            |
+
+利用者と初期店舗を一つのDB transactionで作り、sessionをrotateして`201 Created`を返します。
+登録roleは`buyer`です。初期店舗の`name`は保存済みdisplayName + `"の店舗"`、`description`は
+空文字、`level: 1`、`points: 0`、`syncStatus: "offline"`で固定します。
+
+```json
+{
+  "data": {
+    "id": "018f0f37-8f42-7d4a-a8a1-2b7e45897290",
+    "username": "demo_user",
+    "displayName": "山田 みどり",
+    "role": "buyer",
+    "roleLabel": "購入者",
+    "avatarInitial": "山",
+    "storeId": "018f0f37-a683-7f6f-8834-7d6f3608db33"
+  }
+}
+```
+
+同じusernameの同時登録はDBのUNIQUE制約を正本として一方だけ成功させ、敗者も事前重複と同じ
+`422`と`errors.username`にします。利用者だけ、または店舗だけを残しません。
+
+```json
+{
+  "message": "このユーザー名は既に登録されています。",
+  "errors": {
+    "username": ["このユーザー名は既に登録されています。"]
+  }
+}
+```
+
+### 完成時のログイン
+
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+X-XSRF-TOKEN: CookieをURLデコードした値
+```
+
+```json
+{
+  "username": " DEMO_USER ",
+  "password": "demo-password-123"
+}
+```
+
+成功時はsessionをrotateし、`200 OK`と同じUser DTOを返します。
+
+```json
+{
+  "data": {
+    "id": "018f0f37-8f42-7d4a-a8a1-2b7e45897290",
+    "username": "demo_user",
+    "displayName": "山田 みどり",
+    "role": "buyer",
+    "roleLabel": "購入者",
+    "avatarInitial": "山",
+    "storeId": "018f0f37-a683-7f6f-8834-7d6f3608db33"
+  }
+}
+```
+
+形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
+どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
+timing差を縮小します。`errors.username`は付けません。
+
+```json
+{
+  "message": "ユーザー名またはパスワードが正しくありません。"
+}
+```
+
+### 完成時の状態復元とログアウト
+
+```http
+GET /api/v1/auth/me
+Cookie: session Cookie
+```
+
+認証済みなら`200 OK`と同じUser DTOを返します。
+
+```json
+{
+  "data": {
+    "id": "018f0f37-8f42-7d4a-a8a1-2b7e45897290",
+    "username": "demo_user",
+    "displayName": "山田 みどり",
+    "role": "buyer",
+    "roleLabel": "購入者",
+    "avatarInitial": "山",
+    "storeId": "018f0f37-a683-7f6f-8834-7d6f3608db33"
+  }
+}
+```
+
+匿名・期限切れ・削除済み利用者のsessionは、どれも次の`401`です。
+
+```json
+{
+  "message": "Unauthenticated."
+}
+```
+
+`POST /api/v1/auth/logout`は認証とCSRFの両方が必要です。成功時はsessionを削除して両Cookieを
+期限切れにし、`204 No Content`で本文を返しません。
+
+### 完成時のError response
+
+JSON構文不正は400、field validationとusername重複は422です。422はcamelCaseのrequest field名を
+`errors`へ使います。message文面では分岐せず、HTTP statusと`errors`のfield名で分岐します。
+
+```json
+{
+  "message": "ユーザー名は小文字英数字と_で3〜32文字にしてください。",
+  "errors": {
+    "username": ["ユーザー名は小文字英数字と_で3〜32文字にしてください。"]
+  }
+}
+```
+
+複数fieldが不正な場合も全fieldを`errors`へ返します。top-level `message`は人向けの要約であり、
+複数error数を追記する場合があるため、フロントの分岐や入力欄対応には使いません。
+
+| endpoint      | 正常時           | 想定するerror                           |
+| ------------- | ---------------- | --------------------------------------- |
+| `csrf-cookie` | 204、本文なし    | 429                                     |
+| `register`    | 201 `data: User` | 400 / 413 / 415 / 419 / 422 / 429       |
+| `login`       | 200 `data: User` | 400 / 401 / 413 / 415 / 419 / 422 / 429 |
+| `me`          | 200 `data: User` | 401                                     |
+| `logout`      | 204、本文なし    | 401 / 419                               |
+
+### 完成時のRate limit
+
+registerとloginは同じ二つの60秒固定windowを共有します。
+
+| bucket                        | 上限 | 429になる試行 |
+| ----------------------------- | ---: | ------------: |
+| client IP                     |   30 |        31回目 |
+| canonical account + client IP |    5 |         6回目 |
+
+routeへ到達した成功・401・422の試行をどちらも消費します。CSRFでrouteへ到達しないrequestは
+消費しません。一方のbucketですでに拒否されたrequestは、もう一方の残数を消費しません。
+usernameがstringなら形式不正でもtrim・小文字化し、欠落またはstring以外なら空identifierを作ります。
+canonical account keyは`username:<normalized username>`です。未登録usernameも同じkeyを使うため、
+成功したregisterの直後にloginしても別bucketへ切り替わりません。DBで既存利用者へ解決できた
+legacy real emailとsynthetic emailは、その行の保存済みusernameへ写像します。未知emailだけ
+`email:<normalized email>`、identifier欠落は`empty`を使います。新旧fieldが混在するrequestは
+username string、email string、emptyの優先順で一つのkeyを決めます。これにより同じ利用者の
+usernameとemailを交互に使って5回制限を迂回できません。不正入力もIP bucketと空または正規化済み
+identifier bucketを消費します。
+
+email aliasのlookupはlegacy loginを受ける#105まで、legacy registerのemail key生成は#106までの
+期限付き互換です。#121の互換削除release後はproduction API runtimeから旧email readerをなくし、
+usernameと空identifierだけで同じrate-limit規則を維持します。
+
+account解決queryの前にIP bucketがblock済みかを確認し、block済みならalias lookupもaccount bucketの
+更新も行いません。未blockならaliasを解決した後、一つのtransactionでIP bucketを再checkして両bucketを
+lockします。どちらかが上限なら両方とも増やさず、両方に余裕がある場合だけ両方を1回ずつ増やします。
+永続的なaccount lock、`423 Locked`、unlock APIは設けません。429はform-levelで表示し、
+フロントは`Retry-After`が示すwindow終了まで再送を抑止します。
+
+rate-limit keyにはpasswordを絶対に含めません。canonical username（既知accountまたはusername候補）、
+type prefix付きの未知email、emptyのいずれかとIPを組み立てたbucket keyはSHA-256にしてからDBへ保存し、
+生値をDBやlogへ残しません。通常responseには現在の最も厳しいbucketの
+`X-RateLimit-Limit`と`X-RateLimit-Remaining`を返します。429にはさらに秒数の`Retry-After`と
+Unix秒の`X-RateLimit-Reset`を返します。
+直接別originから接続するFrontもこれらを読めるよう、#101でCORSの
+`Access-Control-Expose-Headers`へ4 headerを追加し、preflightと実responseをtestします。
+
+```json
+{
+  "message": "Too Many Attempts."
+}
+```
+
+### 現行runtime（username移行前）
+
+以下は移行開始前の接続確認用で、完成時の公開契約ではありません。
+
 最初に`GET /api/v1/auth/csrf-cookie`を`credentials: 'include'`付きで呼びます。
 ブラウザへセッションCookieと`XSRF-TOKEN` Cookieが設定されます。
 POST・DELETE時には`XSRF-TOKEN`をURLデコードした値を`X-XSRF-TOKEN`ヘッダーへ
@@ -224,7 +568,7 @@ CSRFトークンを固定の変数へ保存せず、書き込みのたびにCook
 `$2b$`・`$2y$`のどちらも照合できます。`XSRF-TOKEN` Cookieと
 `X-XSRF-TOKEN`ヘッダーを組み合わせてCSRFを検証します。
 
-### 新規登録
+#### 現行の新規登録
 
 ```http
 POST /api/v1/auth/register
@@ -249,7 +593,7 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 `201 Created`と`data: User`を返します。店舗は`level: 1`、0 points、`offline`から
 始まります。登録ユーザーの`role`は`buyer`ですが、自分の店舗に出品できます。
 
-### ログイン・状態復元・ログアウト
+#### 現行のログイン・状態復元・ログアウト
 
 ```http
 POST /api/v1/auth/login
@@ -284,6 +628,119 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 ログイン・登録には、IPごとに毎分30回、メールアドレスとIPの組み合わせごとに
 毎分5回の制限があります。
 
+### 移行順と互換期間
+
+完成時request / responseと、移行のためだけのlegacy互換を混同しません。
+
+| 段階 | Issue                    | deploy可能な状態                                                             |
+| ---: | ------------------------ | ---------------------------------------------------------------------------- |
+|    1 | Backend #98              | 新列をNULL可で追加・backfillし、旧5列も一時的にNULL可へ緩和。旧APIだけを稼働 |
+|    2 | Backend #99 / #100       | 純粋validatorと新serializerを追加。endpointはまだ切り替えない                |
+|    3 | Backend #101〜#103       | 各endpoint実装とCIを完了するが、認証cutoverまで本番trafficへ公開しない       |
+|    4 | Backend #119 / #120      | lazy sessionとstrict DB connectionをcutover releaseへ含める                  |
+|    5 | Backend #118             | 全API maintenance・catch-up後に#101〜#103 / #119 / #120を同時公開            |
+|    6 | Backend #104 / Front #94 | 非production demo seedを更新し、Frontをusername / displayNameへ切替          |
+|    7 | Backend #105 / #107      | login / me互換削除をmergeするが、単独ではproduction deployしない             |
+|    8 | Backend #108             | `GET /users`削除をmergeするが、単独ではproduction deployしない               |
+|    9 | Backend #106             | register互換・gate削除をmergeするが、単独ではproduction deployしない         |
+|   10 | Backend #121             | #105 / #107 / #108 / #106を一つのmaintenance releaseとして同時公開           |
+|   11 | Backend #109             | 旧DB列を削除し、新列をNOT NULL化して完成時schemaを検証                       |
+
+#98のdeploy後も旧registerは新3列へ書かないため、#98以後かつ#103以前に作成された行には
+`username`、`display_name`、`password_hash`のNULLが残り得ます。新serializerをその行へ適用すると
+契約違反になるため、#101 / #102を単独で本番trafficへ公開しません。このcutoverは現行#103の
+register route scopeに含まれないため、[B-AUTH-CUTOVER #118](https://github.com/IH-Ggroup/minetenant-backend/issues/118)
+で追跡します。全API maintenance、versioned catch-up、instance切替、preflight、rollbackの唯一の
+運用手順は[`auth-cutover.md`](./auth-cutover.md)です。#103の二重書き込みが有効になる前に#101 / #102へ
+trafficを流さず、#109の最終backfillをcutover確認の代わりにしません。
+
+#101で`USERNAME_AUTH_ENABLED`を追加し、#102 / #103も同じgateを使います。local / testでは欠落時
+`false`、`APP_ENV=production`では明示設定を必須とし、欠落・空文字・`true` / `false`以外は設定errorで
+起動しません。`false`では現行email endpointと旧serializerだけを実行し、新認証codeへtrafficを
+流しません。#103はcutover後の新旧register
+requestを新旧列へ互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
+利用者へ旧email loginを透過的に提供できないため、runbookどおりmaintenanceとforward-fixを優先します。
+
+認証cutover後も、旧login `{ email, password }`は#105が完了するまで、旧register
+`{ name, email, password, password_confirmation? }`は#106が完了するまで受理します。新旧fieldを
+一つのrequestに混在させた場合は422とし、混在した新旧固有fieldをそれぞれ`errors`へ返します。
+legacy requestのvalidation errorだけは旧Frontが表示できる旧field名を返し、新requestは常に
+camelCaseの新field名を返します。#105後のloginで`email`、#106後のregisterで`name`、`email`、
+`password_confirmation`が一つでも送られた場合は、他のfieldが正しくても422とし、送られた旧field名を
+`errors`へ返します。削除済みfieldをunknown keyとして黙って無視しません。
+
+#105 / #107はlogin / meの旧branchを削除し、#108は`GET /users`を削除しますが、3 PRを単独では
+production deployしません。#106がlegacy register、旧列write、最後のfalse branch、config、testを
+削除したcommitまでを[B-AUTH-CONTRACT-CUTOVER #121](https://github.com/IH-Ggroup/minetenant-backend/issues/121)
+が一つのmaintenance releaseとして同時にdeployします。#105だけを先に公開して、
+emailで登録できるのにemailではloginできない中間状態を作りません。#108時点ではregister互換だけが
+既知の旧列accessとして残り、#106でruntime旧列reader / writerを0件にします。
+
+#100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設し、現行`GET /users`が使う
+legacy `serializeUser`を変更しません。この期間のregister / login / me routeは前者の結果へ
+`"name": dto.displayName`を足す薄いlegacy adapterをそれぞれ持ち、deprecated fieldを**必ず**
+併記します。#105、#106、#107は対象endpointのadapterだけを削除し、他endpointの
+互換responseを変えません。#108は利用者列挙を避けるため`GET /users`と参照・test・docsを削除します。emailと
+秘密情報は互換期間中もresponseへ返しません。
+
+password rehashの正本切替、binary CAS、旧新両列の同一transaction更新も
+[`auth-cutover.md`](./auth-cutover.md)を正本とします。loginは#105まで、registerは#106まで片方だけを
+更新しません。
+
+#103から#106まで、新requestで作る行も旧runtimeへrollbackできるよう、同じtransactionで旧列へ
+次の互換値を書きます。legacy requestは利用者が送った旧`name` / `email`とpassword hashを旧列へ
+書きつつ、新列も確定します。
+
+| 旧列             | 新requestから書く互換値                                                      |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `name`           | 正規化・保存済み`display_name`                                               |
+| `email`          | 下記の`legacy+<hash>@legacy.invalid`。予約namespaceの一時identifier          |
+| `password`       | `password_hash`と同じbcrypt hash                                             |
+| `role_label`     | `buyer -> 購入者`、`seller -> 出品者`                                        |
+| `avatar_initial` | `display_name`の先頭Unicode code point。旧`VARCHAR(8)`へ必ず収まる互換表示値 |
+
+synthetic emailは`legacy+` + `SHA-256(user_id + ":" + attempt)`のlowercase hex先頭48文字 +
+`@legacy.invalid`です。hash入力の規則は後述のusername生成と同じで、`attempt=0`から始め、
+UNIQUE競合時だけ99まで増やします。100候補すべてが衝突した場合はtransactionをrollbackし、
+秘密値を出さない内部errorとして停止します。cutover後のlegacy registerは
+`^legacy\+[0-9a-f]{48}@legacy\.invalid$`を422 `errors.email`で予約します。
+
+#98 / #118のpreflightは、このnamespaceに一致する既存行ごとに同じuser_idのattempt 0〜99を再計算します。
+emailがいずれかの候補と一致し、`name / password / role_label / avatar_initial`も新列から導出した
+互換値と一致する正規generated行だけは、cutover再実行のため許可します。100候補で再現できない値や
+互換列が不整合な値は、自動変更せず`user_id`を内部向け診断へ出して停止します。
+
+synthetic emailは公開DTO、通常のUI、logへ出しません。synthetic emailによる旧loginも、DBで対応する
+保存済みusernameを取得し、usernameやreal legacy emailと同じcanonical account rate-limit bucketを
+消費します。
+pre-#106 runtimeへの緊急rollbackで必要な場合だけ、operatorがusernameから保存済みemailを検索します。
+#105 / #107をmergeし、#108で`GET /users`を削除して残る旧列accessがregister互換だけであることを
+確認してから、#106を最後にmergeします。#106はregisterの旧branchと旧列writeに加え、
+`USERNAME_AUTH_ENABLED`のconfig・残ったregister false branch・testを削除し、新requestの旧5列を
+NULLのままにします。runbookの専用smoke userだけはcleanupとNULL残件0件を確認できればrollback可能ですが、
+その条件を外れた最初の#106 writeがdata point-of-no-returnです。4 PRを別々にproduction deployせず、
+backupと全API maintenanceの下で#121が同じreleaseとして切り替えます。再開後はpre-#106 runtimeへ
+戻さずforward-fixします。
+
+既存利用者とlegacy registerでusername入力がない行は、`user-buyer`が存在する場合だけ`demo`、
+`user-seller`が存在する場合だけ`seller`へ固定し、それ以外を次の規則で生成します。`demo`と`seller`は
+system usernameとして全環境で予約し、public registerは常に422 `errors.username`で拒否します。
+#104のdemo seedだけがlocal / testで固定user IDとの組合せを作成でき、本番cutoverでは実行しません。
+
+1. `attempt=0`から始め、`u_` + `SHA-256(user_id + ":" + attempt)`のlowercase hex先頭30文字を
+   候補にする。hash入力は文字列全体のUTF-8 bytesで、attemptは先頭0なしのASCII 10進表記にする。
+   attempt 0〜99がすべて衝突した場合は自動生成を停止し、対象`user_id`を内部向け診断へ出す。
+2. 既存行のbackfillは`user_id`のbinary昇順で行い、候補が予約済みまたは重複ならattemptを1増やす。
+3. 同じ`user_id`からは同じ候補列を作り、すでに設定済みのvalidなusernameを再実行で上書きしない。
+   ただし`user-buyer` / `user-seller`に対応する固定値以外が設定済みなら停止する。
+4. legacy registerでも先に不変の`user_id`を作り、同じ規則とUNIQUE制約でusernameを確定する。
+
+emailや表示名からusernameを作りません。username-onlyのFrontend #94をdeployする**前**に、
+保持対象が`demo` / `seller`などの破棄可能なdemo accountだけであることを証明するか、ログアウト中の
+利用者も含めて全員へ新usernameを伝達・確認します。認証後しか読めない`/me`だけを移行導線には
+できません。確認できない利用者が一人でもいる状態ではusername-only画面をdeployせず、#105で
+email loginも停止しません。password reset、email recovery、SNS loginはこの契約の対象外です。
+
 ## 疎通確認
 
 ```http
@@ -305,6 +762,10 @@ GET /api/v1/users
 ログイン必須です。初期デモユーザーと新規登録したユーザーを含む一覧です。
 この一覧からユーザーIDを選ぶだけでは、ログインや他人としての操作はできません。
 通常の画面では`GET /auth/me`を使って本人を取得してください。
+
+Front / MODに利用箇所がなく、認証済みなら全usernameを列挙できるため、完成時にはBackend #108で
+route・参照・test・このlegacy契約を削除します。auth専用`serializeSessionUser`へ接続しません。
+削除までは次の現行legacy responseだけを維持し、新列やemail、秘密情報を追加しません。
 
 ```json
 {
@@ -943,14 +1404,14 @@ export async function api<T>(
 }
 ```
 
-使用例です。`Product`はこの文書の一点物Product型へ更新し、`SessionUser`と`Transaction`は
-フロントの既存の型を使います。
+完成時契約の使用例です。`SessionUser`は「完成時のUser DTO」、`Product`はこの文書の
+一点物Product型へ更新し、`Transaction`はフロントの既存型を使います。
 
 ```ts
 await refreshCsrf();
 const user = await api<SessionUser>('/auth/login', {
   method: 'POST',
-  body: { email: 'demo@minetenant.jp', password: 'password' },
+  body: { username: 'demo', password: 'password' },
 });
 const products = await api<Product[]>(
   `/products?${new URLSearchParams({ keyword: '木' })}`,
@@ -982,17 +1443,40 @@ await api<void>('/auth/logout', { method: 'POST' });
 
 1. `src/api/client.ts`がCookie・CSRF・`data`の取り出し・204・HTTPエラーを共通処理します。
 2. `src/api/auth.ts`が登録・ログイン・ログアウト・`GET /auth/me`に接続します。
-   登録画面は名前・メールアドレス・パスワード・確認用パスワードを送信します。
+   登録画面はusername・任意のdisplayName・password・必須のpasswordConfirmationをcamelCaseで送り、
+   ログイン画面はusernameとpasswordを送ります。
 3. `DemoStoreProvider`はログイン状態をAPIから復元します。セッションCookieはブラウザが管理し、
-   パスワードやトークンはlocalStorageへ保存しません。
+   パスワードやトークンはlocalStorageへ保存しません。利用者名は`displayName`を表示し、
+   `storeId === null`なら出品・店舗管理の導線を隠し、直URLからのroute遷移とAPI呼び出しも
+   blockします。
 4. 出品では保持した`requestId`と数量なしの商品情報を送信し、`sellerId`・`storeId`・`status`は
    API側で決定します。
 5. 購入は`POST /products/{productId}/purchases`へ保持した`requestId`を送信します。
    `transaction.id`で完了画面へ進み、商品を再GETして販売状態を表示します。
 6. マイページ・購入完了画面では`GET /transactions`から本人の取引を取得し、
    店舗管理では本人の店舗ダッシュボードを使います。クライアントから本人IDを指定しません。
-7. 登録・ログインの422は入力欄に表示します。401時は認証状態をクリアし、
+7. 登録・ログインの422はcamelCaseの`errors`を入力欄に表示します。loginの401はform-levelの
+   認証失敗として表示し、`GET /auth/me`など認証必須requestの401では認証状態をクリアします。
    419や通信失敗では操作を自動再送せず、ユーザーへ再操作を案内します。
+
+Frontend #94はこの契約を前提に実API接続するため、結合時に次を確認します。
+
+- `SessionUser`をこの文書の7 fieldへexactに揃え、`storeId`を`string | null`として扱う。
+- loginの未知username / password不一致testを、`errors.username`のないform-level 401へ更新する。
+  構文・field validationだけを422として入力欄へ表示する。
+- username欄は`autoComplete="username"`、`autoCapitalize="none"`と「小文字英数字・underscoreの
+  3〜32文字」のhintを持ち、trim・小文字化した値へ`^[a-z0-9_]{3,32}$`を適用する。raw inputへ
+  `maxLength={32}`を付けると空白付き32文字を入力途中で壊すため、stateを先に正規化する実装でだけ
+  native min/maxを使い、前後空白付き32文字の境界testを持つ。
+- Frontでも文字数・byte数を補助表示または事前検証する場合は、displayNameを
+  `Array.from(value.trim()).length`、未加工passwordを`Array.from(value).length`、UTF-8 byte数を
+  `new TextEncoder().encode(value).length`で数える。Frontで同じ検証を重ねること自体は#94の
+  必須範囲とせず、Backendの422を最終判定とする。
+- 429はfieldへ割り当てずform-levelで表示し、`Retry-After`中は再送を抑止する。423や恒久lockの
+  UI、unlock flowは作らない。
+- fixture、test、READMEをBackend #104へ合わせ、usernameを`demo` / `seller`にする。
+  `roleLabel`と`avatarInitial`を旧fixtureでhard-codeせずAPI responseを使い、emailログイン案内を
+  完成時のREADMEへ残さない。
 
 ## Fabric商品一覧
 
