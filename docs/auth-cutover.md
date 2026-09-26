@@ -39,8 +39,11 @@ npm run db:auth-backfill -- --mode=check
 npm run db:auth-backfill -- --mode=apply
 ```
 
-`--mode`を省略した場合は書き込まない`check`です。commandはschema migrationの適用記録とは独立して
-全usersを処理するため、#98の記録後に旧registerが追加した行も対象になります。
+`--mode`を省略した場合は書き込まない`check`です。commandの起動には`0003_username_auth`の履歴記録と、
+同migrationが作る列・旧5列のNULL許可・username UNIQUEが必要です。ただし処理済みかどうかを履歴だけで
+判断せず、毎回全usersを走査するため、#98の記録後に旧registerや現行seedが追加した新3列すべてNULLの
+行も対象になります。この期間のNULL行はAPI readiness failureではありませんが、`check`のnon-zeroは
+username cutoverの準備が未完了であることを示します。
 
 両modeは最初に専用`PoolConnection`を1本checkoutし、`SELECT DATABASE()`のUTF-8値をSHA-256にした
 lowercase hex先頭16文字から`minetenant:auth-backfill:v1:<db-hash>`を作ります。同じconnectionで

@@ -60,6 +60,9 @@ MySQL本体のインストールやOSサービスの起動は自動化しませ�
 接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
+`0003_username_auth`適用後もroute、serializer、seedとデモ認証はemail方式のままです。#118のcutover前に
+現行registerやseedが作る新しい認証3列すべてNULLの行は想定内で、移行用commandが後から補完します。
+
 [疎通確認](http://localhost:8787/api/hello)が
 `MineTenant API is running.`を返せば起動完了です。停止は`Ctrl+C`です。
 APIは起動前にDB接続を確認するため、DBが未準備のまま見かけ上起動して
@@ -74,15 +77,17 @@ Windows PowerShellでは`$env:PORT="8788"; npm run dev`です。
 最初に`npm run doctor`を実行してください。Node.js、MySQLの接続先・バージョン、DB、
 必須テーブル・列・一意制約・互換triggerをパスワードを表示せず確認します。よくあるエラーは次のように対処できます。
 
-| コード                                       | 原因                                                                       | 対処                                                                                   |
-| -------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `ECONNREFUSED`                               | MySQL停止、またはhost・port違い                                            | MySQLを起動し、`.env`の`DB_HOST`・`DB_PORT`を確認                                      |
-| `ER_ACCESS_DENIED_ERROR`                     | 接続用ユーザー未作成、または認証情報違い                                   | 初回は`npm run dev`が自動準備。既存`.env`は設定を確認                                  |
-| `ER_BAD_DB_ERROR`                            | `DB_DATABASE`のDBが未作成                                                  | `npm run dev`がローカルDBを自動準備                                                    |
-| `MINETENANT_MIGRATION_PENDING`               | 履歴にないDB変更がコードに登録済み                                         | ローカルでは`npm run dev`がversion順に適用                                             |
-| `MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE` | 商品状態のdata・schema・trigger前提が不一致                                | 書き込みを停止してbackup。ローカルは`npm run db:bootstrap`、共有DBは管理者と前提を確認 |
-| `MINETENANT_SCHEMA_INCOMPLETE`               | 適用済み履歴に対して必須テーブルが不足                                     | DBをバックアップして履歴と実schemaを調査                                               |
-| `MINETENANT_SCHEMA_MISMATCH`                 | 適用済み履歴に対して永続監査table・列・一意制約・triggerが不足または不一致 | DBをバックアップして履歴と実schemaを調査                                               |
+| コード                                                                 | 原因                                                                       | 対処                                                                                                                       |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `ECONNREFUSED`                                                         | MySQL停止、またはhost・port違い                                            | MySQLを起動し、`.env`の`DB_HOST`・`DB_PORT`を確認                                                                          |
+| `ER_ACCESS_DENIED_ERROR`                                               | 接続用ユーザー未作成、または認証情報違い                                   | 初回は`npm run dev`が自動準備。既存`.env`は設定を確認                                                                      |
+| `ER_BAD_DB_ERROR`                                                      | `DB_DATABASE`のDBが未作成                                                  | `npm run dev`がローカルDBを自動準備                                                                                        |
+| `MINETENANT_MIGRATION_PENDING`                                         | 履歴にないDB変更がコードに登録済み                                         | ローカルでは`npm run dev`がversion順に適用                                                                                 |
+| `MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE`                           | 商品状態のdata・schema・trigger前提が不一致                                | 書き込みを停止してbackup。ローカルは`npm run db:bootstrap`、共有DBは管理者と前提を確認                                     |
+| `MINETENANT_AUTH_SCHEMA_MIGRATION_UNSAFE`                              | username移行schema・index・履歴の前提が不一致                              | 書き込みを停止してbackupし、履歴と実schemaを確認。未記録なら修復後にmigrationを再実行                                      |
+| `MINETENANT_AUTH_BACKFILL_DATA_INVALID` / `MINETENANT_AUTH_BACKFILL_*` | username移行dataまたは専用connection・lockの検証に失敗                     | 書込停止・backup。migration未記録ならdata修復後に再実行し、記録済みなら[runbook](docs/auth-cutover.md)のcheck/reportで診断 |
+| `MINETENANT_SCHEMA_INCOMPLETE`                                         | 適用済み履歴に対して必須テーブルが不足                                     | DBをバックアップして履歴と実schemaを調査                                                                                   |
+| `MINETENANT_SCHEMA_MISMATCH`                                           | 適用済み履歴に対して永続監査table・列・一意制約・triggerが不足または不一致 | DBをバックアップして履歴と実schemaを調査                                                                                   |
 
 セットアップ、doctor、API起動はいずれも同じ診断を表示します。ドライバーの長いスタックトレースより先に、
 エラーコード・接続先・次のコマンドを確認してください。
@@ -183,6 +188,9 @@ npm run build
 ビルド後は`npm start`で起動します。
 テーブルを準備するだけなら`npm run db:migrate`を使います。
 デモデータは`APP_ENV=local`の空DBでのみ`npm run db:seed`で追加できます。
+`npm run db:auth-backfill -- --mode=check`は#109までの一時的なusername移行診断です。既定値は
+書き込まない`check`で、`apply`は[`docs/auth-cutover.md`](docs/auth-cutover.md)に従う#118のmaintenance中に
+だけ実行します。接続先は通常コマンドと同じ`.env` / `DB_*`です。
 
 ## 公開デモとCloudflare
 

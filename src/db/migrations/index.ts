@@ -1,6 +1,7 @@
 import { initialSchemaMigration } from './0000-initial-schema.js';
 import { entityIdColumnsMigration } from './0001-entity-id-columns.js';
 import { productStatusMigration } from './0002-product-status.js';
+import { usernameAuthMigration } from './0003-username-auth.js';
 
 export { initialSchemaMigration } from './0000-initial-schema.js';
 export {
@@ -13,6 +14,7 @@ export {
   ProductStatusMigrationError,
   productStatusMigration,
 } from './0002-product-status.js';
+export { usernameAuthMigration } from './0003-username-auth.js';
 export {
   MigrationRunnerError,
   assertMigrationsCurrent,
@@ -28,4 +30,5 @@ export const migrations = [
   initialSchemaMigration,
   entityIdColumnsMigration,
   productStatusMigration,
+  usernameAuthMigration,
 ] as const;
