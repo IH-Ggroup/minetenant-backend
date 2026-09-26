@@ -1,10 +1,11 @@
-# MineTenant 一点物商品・購入・店舗成長 DB 契約
+# MineTenant Webアカウント・一点物商品・購入・店舗成長 DB契約
 
 この文書は [B-CONTRACT-01](https://github.com/IH-Ggroup/minetenant-backend/issues/41) と
 [B-CONTRACT-02](https://github.com/IH-Ggroup/minetenant-backend/issues/42) で確定した、`products`、
-`purchase_transactions`、`stores`の目標契約です。現行`develop`の実装説明ではなく、B-PRODUCT、
-B-BUY、B-XP Issueが実装するときの正本です。migration、route、service本体は契約Issueでは
-変更しません。
+`purchase_transactions`、`stores`の目標契約と、
+[B-CONTRACT-07](https://github.com/IH-Ggroup/minetenant-backend/issues/96) で確定した`users`の
+目標契約です。現行`develop`の実装説明ではなく、B-PRODUCT、B-BUY、B-XP、B-AUTH Issueが
+実装するときの正本です。migration、route、service本体は契約Issueでは変更しません。
 
 APIのcamelCase、HTTP status、error codeは[`docs/api.md`](./api.md)を正本とし、この文書では
 MySQLのsnake_case、制約、移行規則を固定します。ここにないMinecraft認証・連携、建築ジョブの
@@ -61,6 +62,8 @@ view・trigger・routine・event、改名対象table上の式やpartitionなど�
 | 購入時の販売状態   | `stock < 1`判定後に1減算      | `available`をlockし、`sold`へ一度だけ遷移                      |
 | 店舗points         | 販売店舗へ100 pointsだけ加算  | 出品店舗へ10、buyer店舗へ50、販売店舗へ100を初回成功時だけ加算 |
 | 店舗level          | 境界と表示計算が実装に直書き  | Lv1〜5の境界、最大時、表示計算、丸めを共通契約として固定       |
+| Webアカウント      | email / `name` / `password`   | `username` / `display_name` / `password_hash`。emailは削除     |
+| User表示用field    | DB列へ保存                    | `roleLabel`と`avatarInitial`はserializerで導出                 |
 
 ID列は上記の最終物理名を前提とし、業務機能のmigrationで別名へ戻しません。
 
@@ -78,6 +81,9 @@ ID列は上記の最終物理名を前提とし、業務機能のmigrationで別
 | buyerと販売店舗を同じtransactionで更新           | 購入成立と店舗成長の一部だけがcommitされる状態を作らないため                |
 | 最大Lv後もpointsを保持                           | 累計実績を失わず、将来level追加時にも既存pointsを利用できるため             |
 | 進捗率を小数点以下切り捨て                       | 次の境界へ未到達なのに100%と表示する状態を作らないため                      |
+| usernameをASCII・binary比較                      | 大文字小文字や照合順序に依存せず、登録・ログインIDを一意にするため          |
+| 表示名と認証IDを分離                             | 日本語を含む自由な表示名の変更が、ログインIDや外部キーを変えないため        |
+| User表示値をserializerで導出                     | 権限labelとavatarの保存値がrole・displayNameからずれるのを防ぐため          |
 
 ## API error codeとの対応
 
@@ -90,6 +96,166 @@ ID列は上記の最終物理名を前提とし、業務機能のmigrationで別
 | 422    | `SELF_PURCHASE`           | 変更しない     |
 
 HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
+
+## `users`
+
+`users`はWebアカウントの認証情報と不変の内部IDを保持します。完成時schemaは次の7列だけです。
+2026-09-26時点の`develop`は旧列を使用中で、B-AUTH-01〜12とcutover関連#118〜#121の途中だけ
+新旧列を共存させます。
+
+| 列              | 型                                                  | NULL | default                | 説明                                 |
+| --------------- | --------------------------------------------------- | ---- | ---------------------- | ------------------------------------ |
+| `user_id`       | `VARCHAR(255)`                                      | 不可 | なし                   | UserのPK、不変の内部識別子           |
+| `username`      | `VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin` | 不可 | なし                   | 正規化済みの登録・ログインID         |
+| `display_name`  | `VARCHAR(120)`                                      | 不可 | なし                   | 重複可・日本語可の画面表示名         |
+| `password_hash` | `VARCHAR(255)`                                      | 不可 | なし                   | bcrypt password hash                 |
+| `role`          | `VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin` | 不可 | `buyer`                | `buyer` / `seller`の権限コード       |
+| `created_at`    | `TIMESTAMP(6)`                                      | 不可 | `CURRENT_TIMESTAMP(6)` | 登録日時                             |
+| `updated_at`    | `TIMESTAMP(6)`                                      | 不可 | なし                   | 更新時に`CURRENT_TIMESTAMP(6)`へ更新 |
+
+`updated_at`は`ON UPDATE CURRENT_TIMESTAMP(6)`を付けますが、ER図にないdefaultを追加しません。
+insertするserviceまたはmigrationが初期値を明示します。`password_hash`の内容はASCIIのbcrypt hash
+ですが、列定義は最終ER図どおり`VARCHAR(255)`とし、平文を保存しません。受理するhashは
+`^\$2[by]\$(0[4-9]|1[0-6])\$[./A-Za-z0-9]{53}$`に一致する60文字だけです。preflightはregexに加え、
+`$2y$`を`$2b$`へ変換した値を`bcrypt.getRounds`で検査します。`$2a$`は受理しません。
+
+### 制約とindex
+
+- `PRIMARY KEY (user_id)`。PRIMARY KEYが一意性を保証するため、重複するUNIQUE indexは作らない
+- `UNIQUE INDEX users_username_unique (username)`
+- `INDEX users_role_index (role)`
+- `CONSTRAINT users_username_format_check CHECK
+(CHAR_LENGTH(username) BETWEEN 3 AND 32 AND NOT REGEXP_LIKE(username, '[^a-z0-9_]', 'c'))`
+
+usernameはAPIで前後空白を除去して小文字化した後、`^[a-z0-9_]{3,32}$`を検証します。DBの
+`ascii_bin`、UNIQUE、CHECKでも、case-insensitiveなschema defaultや別writerから不正値が
+入ることを防ぎます。ただし`INSERT IGNORE`と`UPDATE IGNORE`は、警告へ格下げされた切り詰め後の値が
+CHECKを通り得るため禁止します。`REPLACE`もUNIQUE競合時にdelete + insertとなり、外部キーや監査を
+壊し得るため禁止します。#98 / #109のmigration sessionに加え、B-DB-STRICT-MODE #120はruntime poolの
+全connectionを
+初期化・checkoutするたび、business / migration queryより前に`SET SESSION time_zone = '+00:00'`を
+完了し、同じconnectionで`@@SESSION.time_zone = '+00:00'`と、`@@SESSION.sql_mode`へ
+`STRICT_TRANS_TABLES`または`STRICT_ALL_TABLES`があることを検証します。満たさないconnectionでは
+認証queryを実行せず、startupまたはcheckoutをfail closedにします。登録時のroleは`buyer`です。
+この契約で公開するroleは`buyer`と`seller`だけで、
+追加する場合はDB migrationより先にAPIとFrontendのunionを更新します。
+
+### DB列にしないUser表示値
+
+`roleLabel`と`avatarInitial`は保存しません。serializerが次の規則で毎回導出します。
+
+- `buyer -> 購入者`、`seller -> 出品者`
+- `avatarInitial`はtrim済み`display_name`の先頭extended grapheme cluster。
+  Node.jsの`Intl.Segmenter`（`granularity: 'grapheme'`）を使う
+
+未知のroleや空のdisplay_nameをfallbackで隠さず、DB不整合として検出します。完成時にはemail、
+`name`、`password`、`role_label`、`avatar_initial`、password reset tokenを`users`へ持ちません。
+User DTOへの変換は[`docs/api.md`](./api.md)を正本とし、`user_id`を`id`へ変換します。
+
+### 参照境界と`hono_sessions`
+
+usernameとdisplay_nameは変更可能な属性であり、外部キーに使いません。利用者を参照する列はすべて
+`users.user_id`へ接続します。
+
+| table                   | User参照列                         | NULL | delete時   |
+| ----------------------- | ---------------------------------- | ---- | ---------- |
+| `stores`                | `user_id`                          | 不可 | `RESTRICT` |
+| `products`              | `user_id`                          | 不可 | `RESTRICT` |
+| `purchase_transactions` | `buyer_user_id` / `seller_user_id` | 不可 | `RESTRICT` |
+| `hono_sessions`         | `user_id`                          | 可   | `CASCADE`  |
+
+Minecraft UUIDとのlink tableと一時link codeもusernameではなく`users.user_id`を参照します。
+usernameやdisplay_nameを変更してもMinecraft identityとの対応は変わりません。
+
+`hono_sessions.session_id`はsessionのPKです。`hono_sessions.user_id`は匿名sessionだけNULLを許し、
+認証済みsessionでは内部`users.user_id`を保持します。`hono_sessions_user_id_foreign`は
+`ON DELETE CASCADE`です。`user_id`は外部キーに必要なindexを持ちますが、index名はこの契約では
+固定しません。session行へusername、email、password、password hashを複製しません。
+
+### usernameの決定的backfill
+
+B-AUTH-01は既存行を次の規則でbackfillし、同じ入力DBから同じusernameを作ります。
+
+1. `demo`と`seller`を全環境でsystem usernameとして予約する。`user_id='user-buyer'`が存在する場合は、
+   usernameがNULLなら`demo`、`user_id='user-seller'`が存在する場合はNULLなら`seller`へ固定する。
+   すでにそれぞれの固定値なら維持し、それ以外の非NULL値なら上書きせず停止する。予約usernameを
+   対応する固定ID以外が所有している場合も停止する。固定IDがない本番環境へdemo rowは作成しない。
+2. その他は`attempt=0`から始め、`u_` +
+   `SHA-256(user_id + ":" + attempt)`のlowercase hex先頭30文字を候補にする。hash入力は文字列全体の
+   UTF-8 bytesとし、attemptは先頭0なしのASCII 10進表記にする。attempt 0〜99がすべて衝突した場合は
+   loopを続けず、対象`user_id`を内部向け診断へ出して停止する。
+3. 行を`ORDER BY BINARY user_id`で処理し、候補が既存・予約済みならattemptを1増やす。
+4. 上記2つ以外で、すでにvalidなusernameがある行は上書きしない。migration再実行でも同じ値を維持する。
+5. 旧`name`をECMAScript `String.prototype.trim()`と同じ規則でtrimした値をdisplay_nameへ使い、
+   空なら生成済みusernameを使う。非空で120 code pointを超える場合は切り詰めず`user_id`を
+   内部向け診断へ出して停止する。
+6. 旧`password`のbcrypt hashをpassword_hashへbyte変更せずコピーする。平文化・一括rehashしない。
+
+legacy registerにも同じ規則を使います。先に一意なuser_idを作り、そのuser_idから候補を生成して
+UNIQUE競合時だけattemptを増やします。emailや表示名からusernameを生成しません。
+部分適用済みDBで`demo`または`seller`が対応するdemo user以外へ設定済みなら、利用者を自動改名せず
+競合する`user_id`を内部向け診断へ出して停止します。
+backfill完了時に全usernameが`^[a-z0-9_]{3,32}$`へ一致し、重複がなく、小文字化済みであることを
+検証します。部分適用時に残っていた不正値も黙って正規化・上書きせず停止します。
+
+### 段階移行
+
+短い全API maintenanceを除いて互換性を保ちながら切り替えるため、次のexpand / cutover / contract順を
+崩しません。
+
+1. **B-AUTH-01 #98:** `username`、`display_name`、`password_hash`をNULL可で追加し、
+   上記規則でbackfillする。`name`、`email`、`password`、`role_label`、`avatar_initial`と
+   現行email loginを維持する。旧5列は#106以後の新requestがNULLでinsertできるよう、この時点で
+   NULL可へ緩和するが、現行旧writerは引き続き全列へ非NULL値を書く。migrationと同じ共有実装を使う
+   versioned `db:auth-backfill -- --mode=<check|apply>`も追加する。backfill検証後に新列をNULL可のまま
+   `UNIQUE INDEX users_username_unique (username)`を作成・verifyし、#103以後の同時登録をDBで排他する。
+2. **B-AUTH-02〜06 #99〜#103:** auth専用serializer・login・me・registerをfeature gateの後ろへ追加する。
+   legacy registerは旧列と新列を同じtransactionで書き、新requestも#106までは決定済み互換値を
+   旧列へ書いて、両runtimeで読めるようにする。`GET /users`のlegacy serializerはまだ変えない。
+3. **B-AUTH-SESSION #119 / B-DB-STRICT-MODE #120:** 必要時だけ匿名sessionを作るmiddleware hardeningと、
+   全runtime DB connectionのstrict SQL mode検査をcutover releaseへ含める。
+4. **B-AUTH-CUTOVER #118:** 全APIをmaintenanceへ切り替えて旧instanceをdrain・停止し、上記commandの
+   apply / check、全instanceの同一commit・gate確認、再apply / check、内部smoke testを経て公開する。
+5. **B-AUTH-07 #104 / Frontend F-AUTH-01 #94:** local / test専用demo seedを更新し、username /
+   displayNameへ切り替える。`storeId: null`の画面guardを含めて結合確認する。保持対象の全利用者が
+   自分のusernameを確認できるまでemail loginを外さない。本番cutoverでdemo seedは実行しない。
+6. **B-AUTH-08 / 10 #105 / #107:** login / meのlegacy branchとloginの旧`password` read / writeを
+   削除してmergeするが、単独ではproduction deployしない。
+7. **B-AUTH-11 #108:** 利用者列挙を避けるため`GET /users`と参照・test・docsを削除してmergeする。
+   残るruntime旧列accessがregister互換だけであることを確認し、単独ではproduction deployしない。
+8. **B-AUTH-09 #106:** #108完了後にregisterの旧入力・旧列write、残ったregister false branch、feature
+   gateを最後に削除してmergeするが、単独ではproduction deployしない。
+9. **B-AUTH-CONTRACT-CUTOVER #121:** #105 / #107 / #108 / #106を一つの全API maintenance releaseとして
+   同時に切り替える。ここから新requestの旧5列はNULLとなり、runbookの安全なsmoke cleanup条件を
+   外れた後はpre-#106 runtimeへ戻さない。
+10. **B-AUTH-12 #109:** runtime・test・seedに旧列参照がなく、NULL・username重複・不正形式が
+    ないことをpreflightで確認する。空のdisplay_name、`buyer` / `seller`以外のrole、bcryptとして
+    解釈できないpassword_hashも0件であることを確認する。旧5列を削除し、NOT NULL、collation、
+    CHECK、timestampをこの節の完成時schemaへ揃え、#98で作成済みのusername UNIQUE indexを保持・照合する。
+    #121の証跡確認後、旧列を読む`db:auth-backfill` command、package script、専用testも同じPRで削除し、
+    final schema上に恒常的に壊れる運用入口を残さない。
+
+#109はDDL前のbackupと復旧手順を残し、空DB、移行済みDB、再実行を検証します。`users.user_id`と
+それを参照する外部キーはこの移行で改名・再採番・付け替えしません。
+
+完成時のtimestamp制約を付ける前に`created_at`と`updated_at`のNULLも検査します。片方だけがNULLなら
+非NULL側の値をNULL側へコピーします。両方NULLの行があれば推測した日時を保存せず、`user_id`を
+内部向け診断へ出して#109を停止し、backup・監査情報に基づくoperator remediation後に再実行します。
+zero dateは既知時刻として扱わず、片方または両方にあれば同じく自動補完せず停止します。
+
+#98から#103までの間に旧registerが作った行は新3列がNULLになり得るため、#101 / #102の新serializerを
+単独で本番trafficへ公開しません。[B-AUTH-CUTOVER #118](https://github.com/IH-Ggroup/minetenant-backend/issues/118)
+は[`auth-cutover.md`](./auth-cutover.md)のversioned commandと全API maintenance手順を実行します。
+新3列のNULL、usernameの重複・形式違反、trim後の空または120 code point超のdisplay_name、
+`BINARY role NOT IN ('buyer','seller')`、対応外hash、旧`password`と新`password_hash`のbyte差分が
+すべて0件でなければ#101〜#103を有効化しません。synthetic email予約namespaceの行はuser_idから
+attempt 0〜99を再計算し、新旧列も整合する正規generated値だけをcutover再実行用に許可します。
+再現不能または不整合な値が1件でもあれば停止します。
+その後のlegacy registerは新旧列を同じtransactionで書きます。新requestは#106まで
+[`docs/api.md`](./api.md)のsynthetic emailを含む互換値を旧5列へ書き、#108完了後に実施する#106以後は
+NULLのままにします。
+password rehashの正本切替、binary CAS、rollback時の認証可用性も同runbookを正本とします。
+#109のpreflightは最後の防御であり、このcutover前確認を先送りする理由にはしません。
 
 ## `stores`
 
@@ -505,6 +671,12 @@ fix-forwardで再開します。
 
 ## Issue間の受け渡し
 
+- B-AUTH-01〜12（#98〜#109）、B-AUTH-CUTOVER（#118）、B-AUTH-SESSION（#119）、
+  B-DB-STRICT-MODE（#120）、B-AUTH-CONTRACT-CUTOVER（#121）: `users`節のexpand / cutover / contract順、決定的backfillと
+  versioned catch-up、`users.user_id`参照、完成時制約を正本とする。Frontend
+  F-AUTH-01（#94）の結合確認とusername確認導線が完了するまでemail / `name`互換を削除しない。
+  #105 / #107、#108、#106のcode順を崩さず、#121で4 PRを一つのmaintenance releaseとして
+  同時deployしてから#109へ進む
 - B-PRODUCT-01（#49）: schema追加、既存data / 対象demo seed移行、一時互換trigger、Product型・serializer。
   変更で影響を受ける`tests-ts/api.test.ts`、`tests-ts/purchase-concurrency.test.ts`を含む全API・並行購入
   fixture / assertionも同じPRで更新する。このB-CONTRACT-01の受け渡しは、#49本文にある古い
