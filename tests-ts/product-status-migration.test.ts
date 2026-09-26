@@ -157,16 +157,34 @@ function injectPopulatedProductBeforeBackfill(db: Database): MigrationExecutor {
   };
 }
 
-function blockedTriggerCapability(db: Database): MigrationExecutor {
+function blockedTriggerCreation(
+  db: Database,
+  error: { code: string; errno: number },
+): Database {
   return {
-    async query<T extends object>(sql: string, params?: unknown[]) {
-      if (sql.includes('@@GLOBAL.log_bin')) {
-        return [{ logBin: 1, trustFunctionCreators: 0 }] as T[];
-      }
-      return db.query<T>(sql, params);
-    },
+    query: db.query.bind(db),
     execute: db.execute.bind(db),
     transaction: db.transaction.bind(db),
+    close: db.close.bind(db),
+    withConnection: (fn) =>
+      db.withConnection((connection, lease) =>
+        fn(
+          {
+            query: connection.query.bind(connection),
+            async execute(sql: string, params?: unknown[]) {
+              if (/^CREATE TRIGGER/u.test(sql)) {
+                throw Object.assign(
+                  new Error('simulated CREATE TRIGGER failure'),
+                  error,
+                );
+              }
+              return connection.execute(sql, params);
+            },
+            transaction: connection.transaction.bind(connection),
+          },
+          lease,
+        ),
+      ),
   };
 }
 
@@ -650,26 +668,44 @@ describe('0002 product status migration', () => {
     },
   );
 
-  it('rejects binary-log trigger restrictions before starting DDL', async () => {
-    await insertPrincipals(test.db);
+  it.each([
+    {
+      mysqlError: { code: 'ER_TABLEACCESS_DENIED_ERROR', errno: 1142 },
+      message: /TRIGGER privilege/u,
+    },
+    {
+      mysqlError: {
+        code: 'ER_BINLOG_CREATE_ROUTINE_NEED_SUPER',
+        errno: 1419,
+      },
+      message: /log_bin_trust_function_creators/u,
+    },
+  ])(
+    'reports the actual CREATE TRIGGER failure and remains resumable: $mysqlError.code',
+    async ({ mysqlError, message }) => {
+      await insertPrincipals(test.db);
 
-    await expect(
-      productStatusMigration.preflight(blockedTriggerCapability(test.db)),
-    ).rejects.toMatchObject({
-      code: 'MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE',
-      message: expect.stringMatching(/log_bin_trust_function_creators/i),
-    });
-    expect(
-      await test.db.query(
-        `SELECT COLUMN_NAME AS columnName
-           FROM information_schema.columns
-          WHERE table_schema = DATABASE() AND table_name = 'products'
-            AND column_name IN
-                ('status', 'listing_request_id',
-                 'listing_request_fingerprint', 'deleted_at')`,
-      ),
-    ).toEqual([]);
-  });
+      await expect(
+        runMigrations(blockedTriggerCreation(test.db, mysqlError), migrations),
+      ).rejects.toMatchObject({
+        code: 'MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE',
+        message: expect.stringMatching(message),
+        cause: expect.objectContaining(mysqlError),
+      });
+      expect(
+        await test.db.query<{ version: string }>(
+          "SELECT version FROM schema_migrations WHERE version = '0002_product_status'",
+        ),
+      ).toEqual([]);
+
+      await expect(runMigrations(test.db, migrations)).resolves.toEqual({
+        appliedVersions: ['0002_product_status'],
+      });
+      await expect(productStatusMigration.verify(test.db)).resolves.toBe(
+        undefined,
+      );
+    },
+  );
 
   it('accepts status columns without audit tables when products is empty', async () => {
     await addProductStatusColumns(test.db);

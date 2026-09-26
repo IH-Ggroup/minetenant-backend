@@ -361,10 +361,13 @@ WebとMinecraftが別の`request_id`で同時購入しても、商品行lockと`
 migration開始前に、商品出品・削除とWeb / Minecraft購入を受ける全API processを停止します。
 backfill、互換trigger追加、検証のcommitが完了するまで再開しません。その状態で最低限次を記録します。
 
-MySQLでbinary logが有効な場合は、migration実行前にDB管理者が
-`log_bin_trust_function_creators=1`を有効にし、実行ユーザーへ対象schemaの`TRIGGER`権限を付与します。
-アプリ接続用ユーザーへ`SUPER`権限は付与しません。ローカル開発では`npm run db:bootstrap`が管理接続で
-この設定を行い、migration自身も列追加より前に設定と権限を検査します。
+実行ユーザーには対象schemaの`TRIGGER`権限が必要です。MySQLでbinary logが有効な標準運用では、
+DB管理者が`log_bin_trust_function_creators=1`を有効にします。十分な管理権限を持つユーザーで直接
+migrationを実行する場合は、この設定が0でもtriggerを作成できます。アプリ接続用ユーザーへ`SUPER`権限は
+付与しません。ローカル開発では`npm run db:bootstrap`が管理接続で設定を行います。role、wildcard grant、
+proxy userを含む実効権限を`information_schema`から正確に推測することはできないため、migrationは実際に
+`CREATE TRIGGER`を実行して権限を確認します。失敗時はMySQLの1142（`TRIGGER`権限不足）と1419
+（binary log制限）を区別して復旧方法を表示します。
 
 - `stock=0`、`stock=1`、`stock>=2`の件数とProduct ID。`stock>=2`は変換監査用に旧数量も記録する
 - ProductごとのTransaction件数
@@ -422,8 +425,10 @@ B-PRODUCT-01の後も、B-PRODUCT-04とB-BUY-01が完了するまでは旧servic
 backfill直後から`status`を正本にできるよう、B-PRODUCT-01のmigrationは書き込みを再開する前に一時的な
 MySQL `BEFORE INSERT` / `BEFORE UPDATE` triggerを追加し、次を保証します。
 
+- 現行HTTP出品APIは`stock=1`だけを受理する。`stock=0`や`stock>=2`を成功後に黙って丸めず、422で
+  入力者へ返す。B-PRODUCT-04で数量field自体を廃止する
 - 旧INSERTが`status`を省略した場合は、`stock=0`を`sold`、`stock>=1`を`available`へ変換し、物理
-  `stock`もそれぞれ0 / 1へ正規化する
+  `stock`もそれぞれ0 / 1へ正規化する。このtriggerはHTTP API以外の旧writerに対するDB安全網とする
 - 旧UPDATEが`stock`だけを変更した場合は、同じ規則で`status`と`stock`を同期する
 - 新writerは`status`と互換`stock`を必ず同時に書き、`available / 1`または`sold / 0`だけを指定する
 - `status`と`stock`を矛盾した値へ変更するrequestはDB errorでrollbackする

@@ -114,12 +114,13 @@ export function createCatalogRoutes(
     });
     const stock = validator.integer('stock', {
       required: true,
-      min: 0,
-      max: 99_999,
+      min: 1,
+      max: 1,
       messages: {
         required: '在庫数を入力してください。',
         integer: '在庫数は整数で入力してください。',
-        min: '在庫数は0以上で入力してください。',
+        min: '一点物のため在庫数は1を指定してください。',
+        max: '一点物のため在庫数は1を指定してください。',
       },
     });
     const category = validator.string('category', {

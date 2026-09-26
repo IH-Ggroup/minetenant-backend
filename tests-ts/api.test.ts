@@ -11,7 +11,7 @@ const productPayload = {
   name: 'テスト用ツールセット',
   description: 'APIの出品フローを確認するための商品です。',
   price: 2500,
-  stock: 3,
+  stock: 1,
   category: 'tool',
   theme: 'moss',
   emoji: '🧰',
@@ -321,14 +321,14 @@ describe('Hono API on MySQL', () => {
     expect(listed.data[0].id).toBe(created.data.id);
   });
 
-  it('accepts explicit owner IDs and signed integer strings', async () => {
+  it('accepts explicit owner IDs and a signed one-item stock string', async () => {
     const result = await body(
       await seller.json('/api/v1/products', 'POST', {
         ...productPayload,
         storeId: 'store-mine',
         sellerId: 'user-seller',
         price: '2500',
-        stock: '3',
+        stock: '+1',
       }),
       201,
     );
@@ -381,7 +381,7 @@ describe('Hono API on MySQL', () => {
       description: '文'.repeat(2000),
       emoji: '🧰'.repeat(16),
       price: 99999999,
-      stock: 99999,
+      stock: 1,
     };
     await expectStatus(
       await seller.json('/api/v1/products', 'POST', valid),
@@ -393,7 +393,7 @@ describe('Hono API on MySQL', () => {
       description: '文'.repeat(2001),
       emoji: '🧰'.repeat(17),
       price: 100000000,
-      stock: 100000,
+      stock: 2,
     };
     const result = await body(
       await seller.json('/api/v1/products', 'POST', invalid),
@@ -402,6 +402,23 @@ describe('Hono API on MySQL', () => {
     for (const field of ['name', 'description', 'emoji', 'price', 'stock'])
       expect(result.errors).toHaveProperty(field);
   });
+
+  it.each([0, 2, 5, 99_999])(
+    'rejects legacy stock=%i instead of silently changing the requested quantity',
+    async (stock) => {
+      const result = await body(
+        await seller.json('/api/v1/products', 'POST', {
+          ...productPayload,
+          stock,
+        }),
+        422,
+      );
+      expect(result.errors).toHaveProperty('stock');
+      expect(
+        (await body(await guest.request('/api/v1/products'))).data,
+      ).toHaveLength(6);
+    },
+  );
 
   it('rejects another seller identity or another store even when omitted identity is valid', async () => {
     const forged = await body(

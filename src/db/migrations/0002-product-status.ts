@@ -114,15 +114,6 @@ interface StatusPopulationRow {
 
 type ProductStatusPopulationState = 'empty' | 'unpopulated' | 'populated';
 
-interface ServerVariableRow {
-  logBin: number | string;
-  trustFunctionCreators: number | string;
-}
-
-interface PrivilegeRow {
-  canCreateTriggers: number | string;
-}
-
 interface IdRow {
   id: string;
 }
@@ -244,6 +235,12 @@ function unsafe(message: string, cause?: unknown): never {
     message,
     cause === undefined ? undefined : { cause },
   );
+}
+
+function isMysqlError(error: unknown, code: string, errno: number): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; errno?: unknown };
+  return candidate.code === code || Number(candidate.errno) === errno;
 }
 
 function columnKey(table: string, column: string): string {
@@ -1544,65 +1541,6 @@ async function readSnapshot(db: SqlExecutor): Promise<MigrationSnapshot> {
   };
 }
 
-async function assertTriggerCreationSupported(
-  db: SqlExecutor,
-  schema: ProductStatusSchema,
-): Promise<void> {
-  const missing = TRIGGERS.filter(
-    (definition) =>
-      !schema.triggers.some(
-        (trigger) => trigger.triggerName === definition.name,
-      ),
-  );
-  if (missing.length === 0) return;
-
-  const [variables] = await db.query<ServerVariableRow>(
-    `SELECT @@GLOBAL.log_bin AS logBin,
-            @@GLOBAL.log_bin_trust_function_creators AS trustFunctionCreators`,
-  );
-  if (
-    Number(variables?.logBin) === 1 &&
-    Number(variables?.trustFunctionCreators) !== 1
-  ) {
-    unsafe(
-      'MySQL binary logging blocks trigger creation. An administrator must set GLOBAL log_bin_trust_function_creators = 1 before this migration.',
-    );
-  }
-
-  const [privilege] = await db.query<PrivilegeRow>(
-    `SELECT (
-       EXISTS (
-         SELECT 1 FROM information_schema.user_privileges
-          WHERE grantee = CONCAT(
-            QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@',
-            QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))
-          )
-            AND privilege_type IN ('SUPER', 'TRIGGER')
-       ) OR EXISTS (
-         SELECT 1 FROM information_schema.schema_privileges
-          WHERE grantee = CONCAT(
-            QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@',
-            QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))
-          )
-            AND table_schema = DATABASE()
-            AND privilege_type = 'TRIGGER'
-       ) OR EXISTS (
-         SELECT 1 FROM information_schema.table_privileges
-          WHERE grantee = CONCAT(
-            QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@',
-            QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))
-          )
-            AND table_schema = DATABASE()
-            AND table_name = 'products'
-            AND privilege_type = 'TRIGGER'
-       )
-     ) AS canCreateTriggers`,
-  );
-  if (Number(privilege?.canCreateTriggers) !== 1) {
-    unsafe('The application database account lacks TRIGGER privilege.');
-  }
-}
-
 async function ensureAuditTables(db: MigrationExecutor): Promise<void> {
   const [current] = await db.query<CurrentDatabaseRow>(
     'SELECT DATABASE() AS databaseName',
@@ -1641,13 +1579,19 @@ async function createMissingTriggers(db: MigrationExecutor): Promise<void> {
            ON \`${definition.table}\` FOR EACH ROW ${definition.statement}`,
       );
     } catch (error) {
-      if (typeof error !== 'object' || error === null || !('code' in error)) {
-        throw error;
+      if (isMysqlError(error, 'ER_TABLEACCESS_DENIED_ERROR', 1142)) {
+        unsafe(
+          `Could not create compatibility trigger ${definition.name}. Grant the migration account TRIGGER privilege on the target schema, directly or through an active role.`,
+          error,
+        );
       }
-      unsafe(
-        `Could not create compatibility trigger ${definition.name}. Confirm TRIGGER privilege and log_bin_trust_function_creators.`,
-        error,
-      );
+      if (isMysqlError(error, 'ER_BINLOG_CREATE_ROUTINE_NEED_SUPER', 1419)) {
+        unsafe(
+          `Could not create compatibility trigger ${definition.name} because binary logging requires an account with sufficient administrative privilege or GLOBAL log_bin_trust_function_creators = 1.`,
+          error,
+        );
+      }
+      throw error;
     }
   }
 }
@@ -1896,7 +1840,6 @@ export const productStatusMigration: Migration = {
         await assertMigrationAuditDataSafe(db);
       }
     }
-    await assertTriggerCreationSupported(db, schema);
     snapshots.set(db, await readSnapshot(db));
   },
   async up(db: MigrationExecutor): Promise<void> {
