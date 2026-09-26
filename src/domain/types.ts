@@ -20,7 +20,7 @@ export type PurchaseSource = 'web' | 'minecraft';
 export type Timestamp = string | Date | null;
 
 export interface UserRow {
-  id: string;
+  user_id: string;
   name: string;
   email: string;
   password: string;
@@ -33,8 +33,8 @@ export interface UserRow {
 }
 
 export interface StoreRow {
-  id: string;
-  owner_id: string;
+  store_id: string;
+  user_id: string;
   name: string;
   description: string;
   level: number;
@@ -45,9 +45,9 @@ export interface StoreRow {
 }
 
 export interface ProductRow {
-  id: string;
+  product_id: string;
   store_id: string;
-  seller_id: string;
+  user_id: string;
   name: string;
   description: string;
   price: number;
@@ -60,11 +60,11 @@ export interface ProductRow {
 }
 
 export interface TransactionRow {
-  id: string;
+  transaction_id: string;
   request_id: string;
   product_id: string;
-  buyer_id: string;
-  seller_id: string;
+  buyer_user_id: string;
+  seller_user_id: string;
   source: PurchaseSource;
   amount: number;
   status: 'paid' | 'shipping' | 'complete';

@@ -761,7 +761,7 @@ describe('Hono API on MySQL', () => {
       ).code,
     ).toBe('OUT_OF_STOCK');
     await test.db.execute(
-      "UPDATE stores SET points = 950, level = 4 WHERE id = 'store-mine'",
+      "UPDATE stores SET points = 950, level = 4 WHERE store_id = 'store-mine'",
     );
     await expectStatus(
       await buyer.json('/api/v1/purchases', 'POST', {
@@ -825,7 +825,7 @@ describe('Hono API on MySQL', () => {
   it('limits recent transactions to five while counting all historical statuses in sales totals', async () => {
     for (let index = 0; index < 6; index++) {
       await test.db.execute(
-        'INSERT INTO purchase_transactions (id, request_id, product_id, buyer_id, seller_id, source, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO purchase_transactions (transaction_id, request_id, product_id, buyer_user_id, seller_user_id, source, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           `history-${index}`,
           `history-request-${index}`,

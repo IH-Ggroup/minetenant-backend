@@ -14,6 +14,12 @@ import {
 } from './helpers.js';
 
 const businessTables = ['users', 'stores', 'products', 'purchase_transactions'];
+const primaryKeys = {
+  users: 'user_id',
+  stores: 'store_id',
+  products: 'product_id',
+  purchase_transactions: 'transaction_id',
+} as const;
 
 describe('safe migration and initial data setup', () => {
   let test: TestApp;
@@ -46,7 +52,9 @@ describe('safe migration and initial data setup', () => {
       businessTables.map(async (table) => ({
         table,
         schema: await test.db.query(`SHOW CREATE TABLE ${table}`),
-        rows: await test.db.query(`SELECT * FROM ${table} ORDER BY id`),
+        rows: await test.db.query(
+          `SELECT * FROM ${table} ORDER BY ${primaryKeys[table as keyof typeof primaryKeys]}`,
+        ),
       })),
     );
   }
@@ -67,17 +75,17 @@ describe('safe migration and initial data setup', () => {
       await bcrypt.hash('user-changed-password', 4)
     ).replace('$2b$', '$2y$');
     await test.db.execute(
-      "UPDATE users SET password = ?, name = '既存ユーザー' WHERE id = 'user-buyer'",
+      "UPDATE users SET password = ?, name = '既存ユーザー' WHERE user_id = 'user-buyer'",
       [changedPassword],
     );
     await test.db.execute(
-      "UPDATE products SET stock = 37, price = 9100 WHERE id = 'product-stool'",
+      "UPDATE products SET stock = 37, price = 9100 WHERE product_id = 'product-stool'",
     );
     await test.db.execute(
-      "UPDATE stores SET points = 1234, level = 5 WHERE id = 'store-mine'",
+      "UPDATE stores SET points = 1234, level = 5 WHERE store_id = 'store-mine'",
     );
     await test.db.execute(
-      "UPDATE purchase_transactions SET status = 'complete' WHERE id = 'transaction-demo'",
+      "UPDATE purchase_transactions SET status = 'complete' WHERE transaction_id = 'transaction-demo'",
     );
     const before = await snapshot();
 
@@ -94,7 +102,7 @@ describe('safe migration and initial data setup', () => {
       for (const table of ['purchase_transactions', 'products', 'stores']) {
         await tx.execute(`DELETE FROM ${table}`);
       }
-      await tx.execute("DELETE FROM users WHERE id <> 'user-buyer'");
+      await tx.execute("DELETE FROM users WHERE user_id <> 'user-buyer'");
     });
     const before = await snapshot();
     expect(await seedDemo(test.db, 4)).toBe(false);
@@ -128,25 +136,27 @@ describe('safe migration and initial data setup', () => {
   it('keeps the database constraints that prevent lost history, invalid stock and duplicate purchases', async () => {
     const before = await snapshot();
     await expect(
-      test.db.execute("DELETE FROM products WHERE id = 'product-stool'"),
+      test.db.execute(
+        "DELETE FROM products WHERE product_id = 'product-stool'",
+      ),
     ).rejects.toMatchObject({ code: 'ER_ROW_IS_REFERENCED_2' });
     await expect(
       test.db.execute(
-        "UPDATE products SET stock = -1 WHERE id = 'product-hoodie'",
+        "UPDATE products SET stock = -1 WHERE product_id = 'product-hoodie'",
       ),
     ).rejects.toMatchObject({ code: 'ER_WARN_DATA_OUT_OF_RANGE' });
     await expect(
       test.db.execute(`INSERT INTO purchase_transactions
-            (id, request_id, product_id, buyer_id, seller_id, source, amount, status)
+            (transaction_id, request_id, product_id, buyer_user_id, seller_user_id, source, amount, status)
             VALUES ('duplicate-transaction', 'request-demo', 'product-stool', 'user-buyer', 'user-seller', 'web', 4200, 'paid')`),
     ).rejects.toMatchObject({ code: 'ER_DUP_ENTRY' });
     await expect(
       test.db.execute(`INSERT INTO purchase_transactions
-            (id, request_id, product_id, buyer_id, seller_id, source, amount, status)
+            (transaction_id, request_id, product_id, buyer_user_id, seller_user_id, source, amount, status)
             VALUES ('orphan-transaction', 'orphan-request', 'missing', 'user-buyer', 'user-seller', 'web', 4200, 'paid')`),
     ).rejects.toMatchObject({ code: 'ER_NO_REFERENCED_ROW_2' });
     await expect(
-      test.db.execute(`INSERT INTO stores (id, owner_id, name, description)
+      test.db.execute(`INSERT INTO stores (store_id, user_id, name, description)
             VALUES ('duplicate-store', 'user-buyer', 'Duplicate store', '')`),
     ).rejects.toMatchObject({ code: 'ER_DUP_ENTRY' });
     expect(await snapshot()).toEqual(before);

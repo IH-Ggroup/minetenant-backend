@@ -96,6 +96,13 @@ export function databaseDiagnostic(
         summary: '未適用のDBマイグレーションがあります。',
         action: 'APIを起動する前に npm run db:migrate を実行してください。',
       };
+    case 'MINETENANT_ENTITY_ID_MIGRATION_UNSAFE':
+      return {
+        code,
+        summary: 'ID列の移行を安全に続行できないDB状態です。',
+        action:
+          '書き込みを停止したままDBをバックアップし、列・制約・孤児行を確認してからfix-forwardしてください。',
+      };
     case 'MINETENANT_DATABASE_UNSUPPORTED':
       return {
         code,

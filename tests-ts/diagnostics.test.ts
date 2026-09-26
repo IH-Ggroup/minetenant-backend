@@ -66,6 +66,16 @@ describe('database diagnostics', () => {
     expect(output).not.toContain(error.message);
   });
 
+  it('explains an unsafe entity-ID migration without exposing schema details', () => {
+    const error = Object.assign(new Error('private schema inspection detail'), {
+      code: 'MINETENANT_ENTITY_ID_MIGRATION_UNSAFE',
+    });
+    const output = formatErrorForLog('SETUP_FAILED', error, config);
+    expect(output).toContain('MINETENANT_ENTITY_ID_MIGRATION_UNSAFE');
+    expect(output).toContain('バックアップ');
+    expect(output).not.toContain(error.message);
+  });
+
   it('rejects unsafe database identifiers used by the administrator command', () => {
     expect(quoteDatabaseName('minetenant_test')).toBe('`minetenant_test`');
     expect(() => quoteDatabaseName('minetenant; DROP DATABASE mysql')).toThrow(

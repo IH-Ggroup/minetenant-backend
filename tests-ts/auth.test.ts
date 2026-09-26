@@ -69,21 +69,21 @@ describe('session authentication', () => {
     const [user] = await setup.db.query<{
       email: string;
       password: string;
-    }>('SELECT email, password FROM users WHERE id = ?', [data.id]);
+    }>('SELECT email, password FROM users WHERE user_id = ?', [data.id]);
     expect(user!.email).toBe('tanaka@example.com');
     expect(await bcrypt.compare('strong-password', user!.password)).toBe(true);
     const [store] = await setup.db.query<{
-      owner_id: string;
+      user_id: string;
       name: string;
       level: number;
       points: number;
       sync_status: string;
     }>(
-      'SELECT owner_id, name, level, points, sync_status FROM stores WHERE id = ?',
+      'SELECT user_id, name, level, points, sync_status FROM stores WHERE store_id = ?',
       [data.storeId],
     );
     expect(store).toEqual({
-      owner_id: data.id,
+      user_id: data.id,
       name: '田中 太郎の店舗',
       level: 1,
       points: 0,
@@ -94,9 +94,10 @@ describe('session authentication', () => {
     );
     expect(client.cookies.get('XSRF-TOKEN')).not.toBe(originalToken);
     expect(
-      await setup.db.query('SELECT id FROM hono_sessions WHERE id = ?', [
-        originalSession,
-      ]),
+      await setup.db.query(
+        'SELECT session_id FROM hono_sessions WHERE session_id = ?',
+        [originalSession],
+      ),
     ).toEqual([]);
     const me = await client.request('/api/v1/auth/me');
     await expectStatus(me, 200);
@@ -114,7 +115,7 @@ describe('session authentication', () => {
       'このメールアドレスは既に登録されています。',
     ]);
     expect(
-      await setup.db.query('SELECT id FROM users WHERE name = ?', [
+      await setup.db.query('SELECT user_id FROM users WHERE name = ?', [
         '新しい購入者',
       ]),
     ).toEqual([]);
@@ -140,14 +141,14 @@ describe('session authentication', () => {
     expect((await rejected.json()).errors.email).toEqual([
       'このメールアドレスは既に登録されています。',
     ]);
-    const users = await setup.db.query<{ id: string }>(
-      'SELECT id FROM users WHERE email = ?',
+    const users = await setup.db.query<{ user_id: string }>(
+      'SELECT user_id FROM users WHERE email = ?',
       ['race@example.com'],
     );
     expect(users).toHaveLength(1);
     expect(
-      await setup.db.query('SELECT id FROM stores WHERE owner_id = ?', [
-        users[0]!.id,
+      await setup.db.query('SELECT store_id FROM stores WHERE user_id = ?', [
+        users[0]!.user_id,
       ]),
     ).toHaveLength(1);
   });
@@ -185,7 +186,7 @@ describe('session authentication', () => {
       await expectStatus(response, 422);
       expect((await response.json()).errors.password).toBeDefined();
       expect(
-        await setup.db.query('SELECT id FROM users WHERE email = ?', [
+        await setup.db.query('SELECT user_id FROM users WHERE email = ?', [
           'unsafe@example.com',
         ]),
       ).toEqual([]);
@@ -333,9 +334,10 @@ describe('session authentication', () => {
       401,
     );
     expect(
-      await setup.db.query('SELECT id FROM hono_sessions WHERE id = ?', [
-        originalSession,
-      ]),
+      await setup.db.query(
+        'SELECT session_id FROM hono_sessions WHERE session_id = ?',
+        [originalSession],
+      ),
     ).toEqual([]);
   });
 
@@ -343,7 +345,7 @@ describe('session authentication', () => {
     await expectStatus(await client.login(), 200);
     const previous = client.cookies.get(setup.config.sessionCookie)!;
     await setup.db.execute(
-      'UPDATE hono_sessions SET expires_at = ? WHERE id = ?',
+      'UPDATE hono_sessions SET expires_at = ? WHERE session_id = ?',
       [Date.now() - 1, previous],
     );
     await expectStatus(await client.request('/api/v1/auth/me'), 401);

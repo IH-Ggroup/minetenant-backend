@@ -20,14 +20,14 @@ export function createPurchaseRoutes(
 
   const webPurchase = async (c: Context<AppEnv>, routeProductId?: string) => {
     if (routeProductId !== undefined) {
-      const [product] = await db.query<{ id: string }>(
-        'SELECT id FROM products WHERE id = ?',
+      const [product] = await db.query<{ product_id: string }>(
+        'SELECT product_id FROM products WHERE product_id = ?',
         [routeProductId],
       );
       if (!product) notFound();
-      routeProductId = product.id;
+      routeProductId = product.product_id;
     }
-    const userId = c.get('user')!.id;
+    const userId = c.get('user')!.user_id;
     const data = await parseBody(c.req.raw);
     if (!Object.hasOwn(data, 'buyerId')) data.buyerId = userId;
     if (!Object.hasOwn(data, 'source')) data.source = 'web';
@@ -58,8 +58,8 @@ export function createPurchaseRoutes(
       },
     });
     if (productId !== undefined) {
-      const [product] = await db.query<{ id: string }>(
-        'SELECT id FROM products WHERE id = ?',
+      const [product] = await db.query<{ product_id: string }>(
+        'SELECT product_id FROM products WHERE product_id = ?',
         [productId],
       );
       if (!product)
@@ -114,16 +114,16 @@ export function createPurchaseRoutes(
     });
     validator.prohibited('source', 'Minecraft購入では購入元を指定できません。');
     if (productId !== undefined) {
-      const [product] = await db.query<{ id: string }>(
-        'SELECT id FROM products WHERE id = ?',
+      const [product] = await db.query<{ product_id: string }>(
+        'SELECT product_id FROM products WHERE product_id = ?',
         [productId],
       );
       if (!product)
         validator.add('productId', '指定された商品が見つかりません。');
     }
     if (buyerId !== undefined) {
-      const [buyer] = await db.query<{ id: string }>(
-        'SELECT id FROM users WHERE id = ?',
+      const [buyer] = await db.query<{ user_id: string }>(
+        'SELECT user_id FROM users WHERE user_id = ?',
         [buyerId],
       );
       if (!buyer)
