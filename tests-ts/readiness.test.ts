@@ -52,6 +52,13 @@ const indexes = [
     columnName: 'email',
   },
   {
+    tableName: 'users',
+    indexName: 'users_username_unique',
+    nonUnique: 0,
+    sequence: 1,
+    columnName: 'username',
+  },
+  {
     tableName: 'stores',
     indexName: 'owner_unique',
     nonUnique: 0,
@@ -212,6 +219,37 @@ describe('database readiness', () => {
       [],
     );
     expect(readinessProblems(readiness)).toEqual([]);
+  });
+
+  it('requires the username auth columns and semantic uniqueness', () => {
+    const readiness = evaluateDatabaseMetadata(
+      'minetenant',
+      {
+        database: 'minetenant',
+        version: '8.4.11',
+        versionComment: 'MySQL Community Server',
+      },
+      columns.filter(
+        ({ tableName, columnName }) =>
+          tableName !== 'users' ||
+          !['username', 'display_name', 'password_hash'].includes(columnName),
+      ),
+      indexes.filter(({ indexName }) => indexName !== 'users_username_unique'),
+      undefined,
+      triggers,
+      auditTableMetadata,
+      [],
+    );
+
+    expect(readiness.missingColumns).toEqual([
+      'users.username',
+      'users.display_name',
+      'users.password_hash',
+    ]);
+    expect(readiness.missingUniqueKeys).toEqual(['users.username']);
+    expect(new DatabaseReadinessError(readiness).code).toBe(
+      'MINETENANT_SCHEMA_MISMATCH',
+    );
   });
 
   it('reports missing tables, columns and unique constraints', () => {

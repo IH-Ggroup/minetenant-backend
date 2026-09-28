@@ -25,6 +25,8 @@ const APPLICATION_TABLES = [
   'users',
   'schema_migrations',
 ] as const;
+const VALID_MIGRATION_HASH =
+  '$2b$04$li0g2OT/y7U.0JQbXnC3euNhv2yFedgp/gBodO383UCSuOkZ3Var2';
 
 async function assertTestDatabase(db: Database): Promise<void> {
   const [row] = await db.query<{ databaseName: string | null }>(
@@ -52,12 +54,15 @@ async function restoreCurrentSchema(db: Database): Promise<void> {
 }
 
 async function insertPrincipals(db: Database): Promise<void> {
-  await db.execute(`INSERT INTO users
-    (user_id, name, email, password, role, role_label, avatar_initial)
-    VALUES
-      ('migration-buyer', '移行購入者', 'migration-buyer@example.test', 'hash', 'buyer', '購入者', '買'),
-      ('migration-seller', '移行販売者', 'migration-seller@example.test', 'hash', 'seller', '販売者', '販'),
-      ('migration-other', '別の販売者', 'migration-other@example.test', 'hash', 'seller', '販売者', '別')`);
+  await db.execute(
+    `INSERT INTO users
+      (user_id, name, email, password, role, role_label, avatar_initial)
+     VALUES
+      ('migration-buyer', '移行購入者', 'migration-buyer@example.test', ?, 'buyer', '購入者', '買'),
+      ('migration-seller', '移行販売者', 'migration-seller@example.test', ?, 'seller', '販売者', '販'),
+      ('migration-other', '別の販売者', 'migration-other@example.test', ?, 'seller', '販売者', '別')`,
+    [VALID_MIGRATION_HASH, VALID_MIGRATION_HASH, VALID_MIGRATION_HASH],
+  );
   await db.execute(`INSERT INTO stores
     (store_id, user_id, name, description, level, points, sync_status)
     VALUES ('migration-store', 'migration-seller', '移行店舗', '', 1, 0, 'connected')`);
@@ -699,7 +704,7 @@ describe('0002 product status migration', () => {
       ).toEqual([]);
 
       await expect(runMigrations(test.db, migrations)).resolves.toEqual({
-        appliedVersions: ['0002_product_status'],
+        appliedVersions: ['0002_product_status', '0003_username_auth'],
       });
       await expect(productStatusMigration.verify(test.db)).resolves.toBe(
         undefined,

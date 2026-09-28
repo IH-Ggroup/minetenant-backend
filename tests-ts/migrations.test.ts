@@ -28,6 +28,8 @@ import { seedDemo } from '../scripts/seed.js';
 import { createTestApp, type TestApp } from './helpers.js';
 
 const TEST_DATABASE = 'minetenant_test';
+const VALID_MIGRATION_HASH =
+  '$2b$04$li0g2OT/y7U.0JQbXnC3euNhv2yFedgp/gBodO383UCSuOkZ3Var2';
 const APPLICATION_TABLES = [
   'users',
   'stores',
@@ -202,7 +204,7 @@ async function prepareLegacySchema(
         'legacy-user',
         '移行対象ユーザー',
         'legacy@example.com',
-        'legacy-password-hash',
+        VALID_MIGRATION_HASH,
         'seller',
         '販売者',
         '移',
@@ -211,7 +213,7 @@ async function prepareLegacySchema(
         'legacy-buyer',
         '移行対象購入者',
         'legacy-buyer@example.com',
-        'legacy-buyer-password-hash',
+        VALID_MIGRATION_HASH,
         'buyer',
         '購入者',
         '買',
