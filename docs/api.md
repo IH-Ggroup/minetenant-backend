@@ -316,12 +316,12 @@ media type・JSON parseより先に行うため、token欠落・不一致はbody
 認証用validatorへ渡します。
 特にcamelCaseの`passwordConfirmation`もpasswordと同じくtrim対象外です。
 
-| field                  | endpoint         | 正規化と規則                                                                              |
-| ---------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
-| `username`             | register / login | 必須。前後のUnicode空白を除去して小文字化後、`^[a-z0-9_]{3,32}$`。正規化後の値で一意判定  |
-| `displayName`          | register         | 任意。前後のUnicode空白を除去して1〜120文字。省略、`null`、空白だけなら正規化済みusername |
-| `password`             | register / login | 必須。正規化・trimをせず8文字以上、UTF-8で72 bytes以下、NUL禁止                           |
-| `passwordConfirmation` | register         | 任意。送信された場合は正規化・trimをせず、未加工の`password`と完全一致。保存・記録しない  |
+| field                  | endpoint         | 正規化と規則                                                                                              |
+| ---------------------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `username`             | register / login | 必須。前後のUnicode空白を除去してASCII `A-Z`だけを小文字化後、`^[a-z0-9_]{3,32}$`。正規化後の値で一意判定 |
+| `displayName`          | register         | 任意。前後のUnicode空白を除去して1〜120文字。省略、`null`、空白だけなら正規化済みusername                 |
+| `password`             | register / login | 必須。正規化・trimをせず8文字以上、UTF-8で72 bytes以下、NUL禁止                                           |
+| `passwordConfirmation` | register         | 任意。送信された場合は正規化・trimをせず、未加工の`password`と完全一致。保存・記録しない                  |
 
 公式WebフロントではpasswordConfirmationを必須入力にして常に送ります。APIではCLI等との互換のため
 省略可能です。パスワード前後の空白も値の一部であり、勝手に除去しません。保存済みbcrypt hashは
@@ -332,24 +332,25 @@ media type・JSON parseより先に行うため、token欠落・不一致はbody
 
 主な境界例は次のとおりです。
 
-| 入力・状態                                               | 結果                                    |
-| -------------------------------------------------------- | --------------------------------------- |
-| username `" Demo_User "`                                 | `demo_user`として受理                   |
-| username `abc` / 32文字の小文字ASCII                     | 受理                                    |
-| username `ab` / 33文字                                   | 422 `errors.username`                   |
-| username `demo-user` / `利用者` / 内部空白               | 422 `errors.username`                   |
-| username `demo` / `seller`                               | 予約済みとして422 `errors.username`     |
-| 既存`demo_user`に対する`" DEMO_USER "`                   | 正規化後重複として422 `errors.username` |
-| password 7文字 / 8文字                                   | 422 / 受理                              |
-| ASCII password 72 bytes / 73 bytes                       | 受理 / 422 `errors.password`            |
-| passwordにJSON escapeの`\u0000`を含む                    | 422 `errors.password`                   |
-| displayName 1文字 / 120文字 / 121文字                    | 受理 / 受理 / 422 `errors.displayName`  |
-| confirmation省略 / 完全一致                              | 受理                                    |
-| passwordとconfirmationが同じ`" password "`               | 空白を値の一部として受理                |
-| `password`が`"password"`、confirmationが`" password "`   | 422 `errors.passwordConfirmation`       |
-| confirmationの大文字小文字だけが異なる                   | 422 `errors.passwordConfirmation`       |
-| username / password / confirmationがnull・number・object | 対応fieldの422                          |
-| displayNameがnumber・object                              | 422 `errors.displayName`                |
+| 入力・状態                                                                | 結果                                    |
+| ------------------------------------------------------------------------- | --------------------------------------- |
+| username `" Demo_User "`                                                  | `demo_user`として受理                   |
+| username `abc` / 32文字の小文字ASCII                                      | 受理                                    |
+| username `ab` / 33文字                                                    | 422 `errors.username`                   |
+| username `demo-user` / `利用者` / 内部空白                                | 422 `errors.username`                   |
+| usernameにASCIIへcase foldされる非ASCII文字（例: U+212A KELVIN SIGN `K`） | 422 `errors.username`                   |
+| username `demo` / `seller`                                                | 予約済みとして422 `errors.username`     |
+| 既存`demo_user`に対する`" DEMO_USER "`                                    | 正規化後重複として422 `errors.username` |
+| password 7文字 / 8文字                                                    | 422 / 受理                              |
+| ASCII password 72 bytes / 73 bytes                                        | 受理 / 422 `errors.password`            |
+| passwordにJSON escapeの`\u0000`を含む                                     | 422 `errors.password`                   |
+| displayName 1文字 / 120文字 / 121文字                                     | 受理 / 受理 / 422 `errors.displayName`  |
+| confirmation省略 / 完全一致                                               | 受理                                    |
+| passwordとconfirmationが同じ`" password "`                                | 空白を値の一部として受理                |
+| `password`が`"password"`、confirmationが`" password "`                    | 422 `errors.passwordConfirmation`       |
+| confirmationの大文字小文字だけが異なる                                    | 422 `errors.passwordConfirmation`       |
+| username / password / confirmationがnull・number・object                  | 対応fieldの422                          |
+| displayNameがnumber・object                                               | 422 `errors.displayName`                |
 
 ### 完成時の新規登録
 
@@ -518,7 +519,8 @@ registerとloginは同じ二つの60秒固定windowを共有します。
 
 routeへ到達した成功・401・422の試行をどちらも消費します。CSRFでrouteへ到達しないrequestは
 消費しません。一方のbucketですでに拒否されたrequestは、もう一方の残数を消費しません。
-usernameがstringなら形式不正でもtrim・小文字化し、欠落またはstring以外なら空identifierを作ります。
+usernameがstringなら形式不正でもtrimしてASCII `A-Z`だけを小文字化し、欠落またはstring以外なら
+空identifierを作ります。
 canonical account keyは`username:<normalized username>`です。未登録usernameも同じkeyを使うため、
 成功したregisterの直後にloginしても別bucketへ切り替わりません。DBで既存利用者へ解決できた
 legacy real emailとsynthetic emailは、その行の保存済みusernameへ写像します。未知emailだけ
@@ -1465,7 +1467,7 @@ Frontend #94はこの契約を前提に実API接続するため、結合時に�
 - loginの未知username / password不一致testを、`errors.username`のないform-level 401へ更新する。
   構文・field validationだけを422として入力欄へ表示する。
 - username欄は`autoComplete="username"`、`autoCapitalize="none"`と「小文字英数字・underscoreの
-  3〜32文字」のhintを持ち、trim・小文字化した値へ`^[a-z0-9_]{3,32}$`を適用する。raw inputへ
+  3〜32文字」のhintを持ち、trimしてASCII `A-Z`だけを小文字化した値へ`^[a-z0-9_]{3,32}$`を適用する。raw inputへ
   `maxLength={32}`を付けると空白付き32文字を入力途中で壊すため、stateを先に正規化する実装でだけ
   native min/maxを使い、前後空白付き32文字の境界testを持つ。
 - Frontでも文字数・byte数を補助表示または事前検証する場合は、displayNameを

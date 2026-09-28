@@ -144,7 +144,8 @@ insertするserviceまたはmigrationが初期値を明示します。`password_
 - `CONSTRAINT users_username_format_check CHECK
 (CHAR_LENGTH(username) BETWEEN 3 AND 32 AND NOT REGEXP_LIKE(username, '[^a-z0-9_]', 'c'))`
 
-usernameはAPIで前後空白を除去して小文字化した後、`^[a-z0-9_]{3,32}$`を検証します。DBの
+usernameはAPIで前後空白を除去してASCII `A-Z`だけを小文字化した後、`^[a-z0-9_]{3,32}$`を
+検証します。DBの
 `ascii_bin`、UNIQUE、CHECKでも、case-insensitiveなschema defaultや別writerから不正値が
 入ることを防ぎます。ただし`INSERT IGNORE`と`UPDATE IGNORE`は、警告へ格下げされた切り詰め後の値が
 CHECKを通り得るため禁止します。`REPLACE`もUNIQUE競合時にdelete + insertとなり、外部キーや監査を
