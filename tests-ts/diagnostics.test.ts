@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { formatMigrationError } from '../scripts/migrate.js';
 import { readConfig } from '../src/config.js';
+import { AuthBackfillDataError } from '../src/db/auth-backfill.js';
 import {
   databaseDiagnostic,
   formatErrorForLog,
@@ -84,6 +86,26 @@ describe('database diagnostics', () => {
     expect(output).toContain('MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE');
     expect(output).toContain('db:bootstrap');
     expect(output).toContain('TRIGGER');
+    expect(output).not.toContain(error.message);
+  });
+
+  it('keeps auth migration diagnostics free of row identifiers and secrets', () => {
+    const error = new AuthBackfillDataError(
+      [
+        {
+          userId: 'private-user@example.test',
+          violationCode: 'PASSWORD_HASH_INVALID',
+        },
+      ],
+      1,
+      1,
+    );
+    const output = formatMigrationError(error, config);
+
+    expect(Object.keys(error)).not.toContain('violations');
+    expect(output).toContain('MINETENANT_AUTH_BACKFILL_DATA_INVALID');
+    expect(output).toContain('docs/auth-cutover.md');
+    expect(output).not.toContain('private-user@example.test');
     expect(output).not.toContain(error.message);
   });
 

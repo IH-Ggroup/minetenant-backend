@@ -320,6 +320,44 @@ describe('safe migration and initial data setup', () => {
     ).resolves.toMatchObject({ invalidTriggers: [] });
   });
 
+  it('rejects startup readiness when the username auth schema is incomplete', async () => {
+    await test.db.execute('ALTER TABLE users DROP INDEX users_username_unique');
+    try {
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+    } finally {
+      await test.db.execute(
+        'ALTER TABLE users ADD UNIQUE INDEX users_username_unique (username)',
+      );
+    }
+
+    await test.db.execute(
+      'ALTER TABLE users RENAME COLUMN display_name TO readiness_display_name',
+    );
+    try {
+      const readiness = await inspectDatabaseReadiness(
+        test.db,
+        test.config.dbDatabase,
+      );
+      expect(readiness.missingColumns).toContain('users.display_name');
+      await expect(
+        assertDatabaseReady(test.db, test.config.dbDatabase),
+      ).rejects.toMatchObject({ code: 'MINETENANT_SCHEMA_MISMATCH' });
+    } finally {
+      await test.db.execute(
+        'ALTER TABLE users RENAME COLUMN readiness_display_name TO display_name',
+      );
+    }
+
+    await expect(
+      assertDatabaseReady(test.db, test.config.dbDatabase),
+    ).resolves.toMatchObject({
+      missingColumns: [],
+      missingUniqueKeys: [],
+    });
+  });
+
   it('rejects startup readiness while a persistent migration audit table is missing', async () => {
     const auditTable = 'product_status_migration_product_audit';
     const temporarilyRenamedTable =
