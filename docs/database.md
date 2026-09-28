@@ -100,8 +100,8 @@ HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
 ## `users`
 
 `users`はWebアカウントの認証情報と不変の内部IDを保持します。完成時schemaは次の7列だけです。
-2026-09-26時点の`develop`は旧列を使用中で、B-AUTH-01〜12とcutover関連#118〜#121の途中だけ
-新旧列を共存させます。
+`0003_username_auth`適用後もruntimeは旧列を使用し、B-AUTH-01〜12とcutover関連#118〜#121の
+途中だけ新旧列を共存させます。
 
 | 列              | 型                                                  | NULL | default                | 説明                                 |
 | --------------- | --------------------------------------------------- | ---- | ---------------------- | ------------------------------------ |
@@ -112,6 +112,23 @@ HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
 | `role`          | `VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin` | 不可 | `buyer`                | `buyer` / `seller`の権限コード       |
 | `created_at`    | `TIMESTAMP(6)`                                      | 不可 | `CURRENT_TIMESTAMP(6)` | 登録日時                             |
 | `updated_at`    | `TIMESTAMP(6)`                                      | 不可 | なし                   | 更新時に`CURRENT_TIMESTAMP(6)`へ更新 |
+
+### #98適用後の移行中schema
+
+`0003_username_auth`は完成時制約を一度に有効化せず、既存email認証を動かしたまま次の3列を追加します。
+
+| 列              | 型                                                              | NULL | default |
+| --------------- | --------------------------------------------------------------- | ---- | ------- |
+| `username`      | `VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin`             | 可   | `NULL`  |
+| `display_name`  | `VARCHAR(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | 可   | `NULL`  |
+| `password_hash` | `VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | 可   | `NULL`  |
+
+互換用の`name`、`email`、`password`、`role_label`、`avatar_initial`も元の型と
+`utf8mb4_unicode_ci`を維持したままNULL可へ緩和します。`email`のUNIQUE、`users_role_index`、
+`user_id`、利用者参照の全外部キー、`role`、timestampは変更しません。backfill後に
+`UNIQUE INDEX users_username_unique (username)`だけを追加し、usernameのCHECK、完成時のNOT NULL・
+role/default/timestamp制約、旧5列の削除は#109で行います。したがって#98直後は複数のNULL usernameを
+許容します。
 
 `updated_at`は`ON UPDATE CURRENT_TIMESTAMP(6)`を付けますが、ER図にないdefaultを追加しません。
 insertするserviceまたはmigrationが初期値を明示します。`password_hash`の内容はASCIIのbcrypt hash
@@ -198,6 +215,14 @@ UNIQUE競合時だけattemptを増やします。emailや表示名からusername
 backfill完了時に全usernameが`^[a-z0-9_]{3,32}$`へ一致し、重複がなく、小文字化済みであることを
 検証します。部分適用時に残っていた不正値も黙って正規化・上書きせず停止します。
 
+`0003_username_auth`はexpand DDL、全行を対象にした1 transactionのDML、username UNIQUE、verify、
+履歴記録の順に進みます。DDL後に失敗した場合は追加列と旧5列のNULL許可が残り得ますが、DMLは全体を
+rollbackし、同じversionを再実行して続行できます。部分適用済みDBでは検証済みの非NULL新値を
+上書きせずNULLだけを埋め、不正値、旧passwordとのhash差分、旧5列のNULL、不正roleが1件でもあれば
+全体を停止します。migration中に現行旧writerが追加した行については、新3列がすべてNULLの状態だけを
+verifyで許容し、一部だけNULLの状態は拒否します。履歴記録後の全NULL行は#118までにversioned commandで
+catch-upします。
+
 ### 段階移行
 
 短い全API maintenanceを除いて互換性を保ちながら切り替えるため、次のexpand / cutover / contract順を
@@ -205,7 +230,9 @@ backfill完了時に全usernameが`^[a-z0-9_]{3,32}$`へ一致し、重複がな
 
 1. **B-AUTH-01 #98:** `username`、`display_name`、`password_hash`をNULL可で追加し、
    上記規則でbackfillする。`name`、`email`、`password`、`role_label`、`avatar_initial`と
-   現行email loginを維持する。旧5列は#106以後の新requestがNULLでinsertできるよう、この時点で
+   現行email loginを維持する。cost引き上げ時のrehashは旧`password`をbinary CAS条件にし、
+   `password`と`password_hash`を一つのUPDATEで同じhashへ更新する。旧5列は#106以後の新requestが
+   NULLでinsertできるよう、この時点で
    NULL可へ緩和するが、現行旧writerは引き続き全列へ非NULL値を書く。migrationと同じ共有実装を使う
    versioned `db:auth-backfill -- --mode=<check|apply>`も追加する。backfill検証後に新列をNULL可のまま
    `UNIQUE INDEX users_username_unique (username)`を作成・verifyし、#103以後の同時登録をDBで排他する。

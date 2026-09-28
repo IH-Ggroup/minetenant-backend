@@ -83,11 +83,14 @@ export const INITIAL_SCHEMA_REQUIREMENTS = {
   ],
 } as const satisfies SchemaRequirements;
 
-/** Current application schema after 0002_product_status. */
+/** Current application schema after 0003_username_auth. */
 export const CURRENT_SCHEMA_REQUIREMENTS = {
   tables: {
     users: [
       'user_id',
+      'username',
+      'display_name',
+      'password_hash',
       'name',
       'email',
       'password',
@@ -144,6 +147,7 @@ export const CURRENT_SCHEMA_REQUIREMENTS = {
   },
   uniqueKeys: [
     { table: 'users', column: 'email' },
+    { table: 'users', column: 'username' },
     { table: 'stores', column: 'user_id' },
     {
       table: 'products',

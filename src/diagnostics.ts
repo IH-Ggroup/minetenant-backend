@@ -111,6 +111,13 @@ export function databaseDiagnostic(
         action:
           '書き込みを停止したままDBをバックアップしてください。ローカル環境は npm run db:bootstrap を実行し、それ以外はデータ不整合・TRIGGER権限・log_bin_trust_function_creators をDB管理者と確認してからfix-forwardしてください。',
       };
+    case 'MINETENANT_AUTH_SCHEMA_MIGRATION_UNSAFE':
+      return {
+        code,
+        summary: 'username認証の移行schemaを安全に続行できない状態です。',
+        action:
+          '書き込みを停止したままDBをバックアップし、schema_migrations の履歴と users の列・indexを確認してからfix-forwardしてください。',
+      };
     case 'MINETENANT_DATABASE_UNSUPPORTED':
       return {
         code,
@@ -127,6 +134,15 @@ export function databaseDiagnostic(
         includeDatabaseTarget: false,
       };
     default:
+      if (code?.startsWith('MINETENANT_AUTH_BACKFILL_')) {
+        return {
+          code,
+          summary:
+            'username認証dataの移行前提または専用DB sessionの検証に失敗しました。',
+          action:
+            '書き込みを停止したままDBをバックアップし、docs/auth-cutover.md の診断手順に従ってください。',
+        };
+      }
       return undefined;
   }
 }

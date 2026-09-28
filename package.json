@@ -15,6 +15,7 @@
     "test": "vitest run",
     "setup": "tsx scripts/setup.ts",
     "db:bootstrap": "tsx scripts/db-bootstrap.ts",
+    "db:auth-backfill": "tsx scripts/auth-backfill.ts",
     "doctor": "tsx scripts/doctor.ts",
     "ci:mysql": "tsx scripts/configure-ci-mysql.ts",
     "db:migrate": "tsx scripts/migrate.ts",
