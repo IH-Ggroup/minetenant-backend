@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { readConfig } from '../src/config.js';
+import { readConfig, type AppConfig } from '../src/config.js';
 import { createDatabase, type Database } from '../src/db.js';
 import {
   AuthBackfillDataError,
@@ -13,6 +13,7 @@ import {
   type AuthBackfillViolation,
 } from '../src/db/auth-backfill.js';
 import { AuthSchemaMigrationError } from '../src/db/auth-schema.js';
+import { formatErrorForLog } from '../src/diagnostics.js';
 
 export interface AuthBackfillCliOptions {
   mode: AuthBackfillMode;
@@ -109,6 +110,13 @@ export function authBackfillErrorCode(error: unknown): string {
     : 'MINETENANT_AUTH_BACKFILL_UNEXPECTED';
 }
 
+export function formatAuthBackfillError(
+  error: unknown,
+  config: AppConfig,
+): string {
+  return formatErrorForLog('AUTH_BACKFILL_FAILED', error, config);
+}
+
 export async function executeAuthBackfill(
   database: Database,
   options: AuthBackfillCliOptions,
@@ -120,24 +128,41 @@ export async function executeAuthBackfill(
     );
   } catch (error) {
     if (error instanceof AuthBackfillDataError) {
-      if (options.reportFile) {
-        await writeAuthBackfillReport(options.reportFile, error.violations);
-      }
       console.error(
         `Auth backfill ${options.mode} failed: total=${error.totalRows} planned=${error.plannedUpdateRows} violationCounts=${JSON.stringify(countAuthBackfillViolations(error.violations))}`,
       );
+      if (options.reportFile) {
+        await writeAuthBackfillReport(options.reportFile, error.violations);
+      }
     }
     throw error;
   }
 }
 
 async function main(): Promise<void> {
-  const options = parseAuthBackfillArguments(process.argv.slice(2));
-  const database = createDatabase(readConfig());
+  let config: AppConfig | undefined;
+  let database: Database | undefined;
   try {
+    const options = parseAuthBackfillArguments(process.argv.slice(2));
+    config = readConfig();
+    database = createDatabase(config);
     await executeAuthBackfill(database, options);
+  } catch (error) {
+    console.error(
+      config
+        ? formatAuthBackfillError(error, config)
+        : `AUTH_BACKFILL_FAILED [${authBackfillErrorCode(error)}]`,
+    );
+    process.exitCode = 1;
   } finally {
-    await database.close();
+    if (database && config) {
+      try {
+        await database.close();
+      } catch (error) {
+        console.error(formatAuthBackfillError(error, config));
+        process.exitCode = 1;
+      }
+    }
   }
 }
 
@@ -145,10 +170,5 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  main().catch((error: unknown) => {
-    console.error(
-      `Auth backfill exited non-zero: ${authBackfillErrorCode(error)}.`,
-    );
-    process.exitCode = 1;
-  });
+  void main();
 }

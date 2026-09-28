@@ -230,7 +230,9 @@ catch-upします。
 
 1. **B-AUTH-01 #98:** `username`、`display_name`、`password_hash`をNULL可で追加し、
    上記規則でbackfillする。`name`、`email`、`password`、`role_label`、`avatar_initial`と
-   現行email loginを維持する。旧5列は#106以後の新requestがNULLでinsertできるよう、この時点で
+   現行email loginを維持する。cost引き上げ時のrehashは旧`password`をbinary CAS条件にし、
+   `password`と`password_hash`を一つのUPDATEで同じhashへ更新する。旧5列は#106以後の新requestが
+   NULLでinsertできるよう、この時点で
    NULL可へ緩和するが、現行旧writerは引き続き全列へ非NULL値を書く。migrationと同じ共有実装を使う
    versioned `db:auth-backfill -- --mode=<check|apply>`も追加する。backfill検証後に新列をNULL可のまま
    `UNIQUE INDEX users_username_unique (username)`を作成・verifyし、#103以後の同時登録をDBで排他する。

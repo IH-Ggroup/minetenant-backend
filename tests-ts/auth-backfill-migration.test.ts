@@ -2,15 +2,18 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import bcrypt from 'bcryptjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   authBackfillErrorCode,
   executeAuthBackfill,
+  formatAuthBackfillError,
   parseAuthBackfillArguments,
   writeAuthBackfillReport,
 } from '../scripts/auth-backfill.js';
 import { migrate } from '../scripts/migrate.js';
 import { seedDemo } from '../scripts/seed.js';
+import { createApp } from '../src/app.js';
 import type { Database, MigrationExecutor, SqlExecutor } from '../src/db.js';
 import {
   applyAuthBackfill,
@@ -345,6 +348,68 @@ describe('0003 username auth migration and catch-up command', () => {
       await client.login('buyer@example.test', 'migration-password'),
       200,
     );
+  });
+
+  it('keeps legacy and new password hashes aligned when login upgrades bcrypt cost', async () => {
+    const password = 'rehash-password';
+    const originalHash = await bcrypt.hash(password, 4);
+    const strongerPassword = 'stronger-password';
+    const strongerHash = await bcrypt.hash(strongerPassword, 6);
+    await insertLegacyUser(test.db, {
+      userId: 'rehash-user',
+      email: 'rehash@example.test',
+      password: originalHash,
+    });
+    await insertLegacyUser(test.db, {
+      userId: 'stronger-hash-user',
+      email: 'stronger-hash@example.test',
+      password: strongerHash,
+    });
+    await migrate(test.db);
+
+    const client = createClient(
+      createApp({
+        db: test.db,
+        config: { ...test.config, bcryptRounds: 5 },
+      }),
+    );
+    await expectStatus(
+      await client.login('rehash@example.test', password),
+      200,
+    );
+    await expectStatus(
+      await client.login('stronger-hash@example.test', strongerPassword),
+      200,
+    );
+
+    const hashes = await test.db.query<{
+      userId: string;
+      password: string;
+      passwordHash: string;
+    }>(
+      `SELECT user_id AS userId, password, password_hash AS passwordHash
+         FROM users
+        WHERE user_id IN ('rehash-user', 'stronger-hash-user')
+        ORDER BY BINARY user_id`,
+    );
+    const rehash = hashes[0]!;
+    expect(rehash!.password).not.toBe(originalHash);
+    expect(rehash!.passwordHash).toBe(rehash!.password);
+    expect(bcrypt.getRounds(rehash!.password)).toBe(5);
+    expect(await bcrypt.compare(password, rehash!.password)).toBe(true);
+    expect(hashes[1]).toEqual({
+      userId: 'stronger-hash-user',
+      password: strongerHash,
+      passwordHash: strongerHash,
+    });
+    await expect(runAuthBackfill(test.db, 'check')).resolves.toMatchObject({
+      plannedUpdateRows: 0,
+      updatedRows: 0,
+    });
+    await expect(runAuthBackfill(test.db, 'apply')).resolves.toMatchObject({
+      plannedUpdateRows: 0,
+      updatedRows: 0,
+    });
   });
 
   it('catches up rows written after migration history and remains idempotent', async () => {
@@ -758,6 +823,7 @@ describe('0003 username auth migration and catch-up command', () => {
     });
     const databaseALock = authBackfillLockName('database-a');
     const databaseBLock = authBackfillLockName('database-b');
+    expect(authBackfillLockName('DATABASE-A')).toBe(databaseALock);
     expect(databaseALock).not.toBe(databaseBLock);
     await test.db.withConnection(async (databaseAConnection) => {
       await test.db.withConnection(async (databaseBConnection) => {
@@ -1022,7 +1088,9 @@ describe('0003 username auth migration and catch-up command', () => {
         { userId: 'user-a', violationCode: 'USERNAME_INVALID' },
       ];
       await writeAuthBackfillReport(report, violations);
-      expect((await stat(report)).mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') {
+        expect((await stat(report)).mode & 0o777).toBe(0o600);
+      }
       expect(
         (await readFile(report, 'utf8'))
           .trim()
@@ -1069,5 +1137,45 @@ describe('0003 username auth migration and catch-up command', () => {
     expect(output).not.toContain('secret@example.test');
     expect(output).not.toContain(VALID_HASH);
     expect(output).toContain('violationCounts=');
+
+    const connectionFailure = Object.assign(
+      new Error(`connect ECONNREFUSED ${VALID_HASH}`),
+      { code: 'ECONNREFUSED' },
+    );
+    const diagnostic = formatAuthBackfillError(connectionFailure, test.config);
+    expect(diagnostic).toContain('ECONNREFUSED');
+    expect(diagnostic).toContain('MySQLに接続できません');
+    expect(diagnostic).not.toContain(VALID_HASH);
+  });
+
+  it('logs violation counts before a report write failure', async () => {
+    await migrate(test.db);
+    await insertLegacyUser(test.db, {
+      userId: 'private-user-id',
+      email: 'private@example.test',
+      password: VALID_HASH.replace('$2b$', '$2a$'),
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'auth-backfill-report-'));
+    const report = join(directory, 'existing.jsonl');
+    await writeFile(report, 'keep\n', { mode: 0o600 });
+    const messages: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => messages.push(values.join(' '));
+    try {
+      await expect(
+        executeAuthBackfill(test.db, {
+          mode: 'check',
+          reportFile: report,
+        }),
+      ).rejects.toMatchObject({ code: 'EEXIST' });
+    } finally {
+      console.error = originalError;
+      await rm(directory, { recursive: true, force: true });
+    }
+    const output = messages.join('\n');
+    expect(output).toContain('violationCounts=');
+    expect(output).not.toContain('private-user-id');
+    expect(output).not.toContain('private@example.test');
+    expect(output).not.toContain(VALID_HASH);
   });
 });

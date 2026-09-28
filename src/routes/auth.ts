@@ -175,14 +175,14 @@ export function createAuthRoutes(
         email: ['メールアドレスまたはパスワードが正しくありません。'],
       });
     }
-    if (bcrypt.getRounds(storedHash) !== config.bcryptRounds) {
+    if (bcrypt.getRounds(storedHash) < config.bcryptRounds) {
+      const rehashedPassword = await bcrypt.hash(password, config.bcryptRounds);
       await db.execute(
-        'UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND password = ?',
-        [
-          await bcrypt.hash(password, config.bcryptRounds),
-          user.user_id,
-          storedHash,
-        ],
+        `UPDATE users
+            SET password = ?, password_hash = ?,
+                updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = ? AND BINARY password = BINARY ?`,
+        [rehashedPassword, rehashedPassword, user.user_id, storedHash],
       );
     }
     await rotateSession(c, db, config, user.user_id);

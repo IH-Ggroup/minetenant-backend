@@ -45,7 +45,8 @@ npm run db:auth-backfill -- --mode=apply
 行も対象になります。この期間のNULL行はAPI readiness failureではありませんが、`check`のnon-zeroは
 username cutoverの準備が未完了であることを示します。
 
-両modeは最初に専用`PoolConnection`を1本checkoutし、`SELECT DATABASE()`のUTF-8値をSHA-256にした
+両modeは最初に専用`PoolConnection`を1本checkoutし、`SELECT DATABASE()`の値を小文字化した
+UTF-8値をSHA-256にした
 lowercase hex先頭16文字から`minetenant:auth-backfill:v1:<db-hash>`を作ります。同じconnectionで
 `GET_LOCK(name, 0)`を実行し、1でなければnon-zeroで終了します。lock名はMySQLの64文字以内で、
 同じserver上の別databaseを不必要にblockしません。named lock保持中はconnectionをpoolへ返さず、
@@ -77,8 +78,10 @@ transaction全体をrollbackし、部分更新を成功扱いしません。`INS
 標準出力と通常logにはmode、対象件数、更新予定または更新済み件数、違反種別ごとの件数だけを出します。
 password、password hash、email、session、CSRF tokenは出しません。修復対象の特定が必要な場合だけ
 `--report-file=<absolute path>`を指定でき、既存fileを上書きせずmode `0600`で新規作成したJSON Linesへ
-`userId`と固定の`violationCode`だけを書きます。commandは違反時にnon-zeroで終了し、reportの保存・削除は
-operatorが監査手順に従います。
+`userId`と固定の`violationCode`だけを書きます。`0600`を保証できるLinux / macOSなどのPOSIX環境だけで
+reportを出力します。WindowsではACLによる同等の保護を実装していないため`--report-file`を指定せず、
+必要な場合はアクセスを制限したWSLまたはLinux運用環境から実行します。commandは違反時にnon-zeroで
+終了し、reportの保存・削除はoperatorが監査手順に従います。
 
 ## 本番cutover
 
@@ -145,8 +148,9 @@ emailではloginできない中間状態を作りません。#109はこのreleas
 ## Password rehashと互換期間
 
 password hashの正本は最初のcutoverまでは旧`password`、cutover成功後は新`password_hash`です。
-#101のbinaryはgate falseでも、照合後にcostを上げる場合は旧`password`をbinary CAS条件にして、同じ
-新hashを`password`と`password_hash`へ一つのtransactionで書きます。gate trueのloginは
+#98以降の現行email loginは、照合後にcostを上げる場合だけ旧`password`をbinary CAS条件にして、同じ
+新hashを`password`と`password_hash`へ一つのUPDATEで書きます。これにより#101が入る前でも
+`db:auth-backfill`がhash差分で停止しません。#101のgate false経路もこの動作を引き継ぎ、gate trueのloginは
 `password_hash`をbinary CAS条件にして両列を同じhashへ更新します。CASが0件なら再読込・再照合し、
 古いhashで新しいhashを上書きしません。#103のregisterも最初から両列へ同じhashを書きます。
 #105まではloginが両列を更新し、#105で旧passwordのread / writeをloginから削除します。registerは

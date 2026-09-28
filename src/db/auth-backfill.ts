@@ -532,7 +532,7 @@ export async function validateAuthBackfillInput(
 
 export function authBackfillLockName(databaseName: string): string {
   const hash = createHash('sha256')
-    .update(databaseName, 'utf8')
+    .update(databaseName.toLowerCase(), 'utf8')
     .digest('hex')
     .slice(0, 16);
   return `minetenant:auth-backfill:v1:${hash}`;
