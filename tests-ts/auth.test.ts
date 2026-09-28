@@ -309,7 +309,6 @@ describe('session authentication', () => {
   it('keeps sessions after recreating the app and invalidates old IDs at logout', async () => {
     await expectStatus(await client.login(), 200);
     const originalSession = client.cookies.get(setup.config.sessionCookie)!;
-    const originalToken = client.cookies.get('XSRF-TOKEN');
     const recreated = createApp({ db: setup.db, config: setup.config });
     await expectStatus(
       await recreated.request('/api/v1/auth/me', {
@@ -320,10 +319,8 @@ describe('session authentication', () => {
       200,
     );
     await expectStatus(await client.json('/api/v1/auth/logout', 'POST'), 204);
-    expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(
-      originalSession,
-    );
-    expect(client.cookies.get('XSRF-TOKEN')).not.toBe(originalToken);
+    expect(client.cookies.get(setup.config.sessionCookie)).toBeUndefined();
+    expect(client.cookies.get('XSRF-TOKEN')).toBeUndefined();
     await expectStatus(await client.request('/api/v1/auth/me'), 401);
     await expectStatus(
       await recreated.request('/api/v1/auth/me', {
@@ -341,15 +338,23 @@ describe('session authentication', () => {
     ).toEqual([]);
   });
 
-  it('expires idle sessions and replaces the cookie with an anonymous session', async () => {
+  it('does not replace an expired session outside CSRF bootstrap', async () => {
     await expectStatus(await client.login(), 200);
     const previous = client.cookies.get(setup.config.sessionCookie)!;
     await setup.db.execute(
       'UPDATE hono_sessions SET expires_at = ? WHERE session_id = ?',
       [Date.now() - 1, previous],
     );
-    await expectStatus(await client.request('/api/v1/auth/me'), 401);
-    expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(previous);
+    const response = await client.request('/api/v1/auth/me');
+    await expectStatus(response, 401);
+    expect(response.headers.getSetCookie()).toHaveLength(0);
+    expect(client.cookies.get(setup.config.sessionCookie)).toBe(previous);
+    expect(
+      await setup.db.query(
+        'SELECT session_id FROM hono_sessions WHERE session_id <> ? AND expires_at > ?',
+        [previous, Date.now()],
+      ),
+    ).toEqual([]);
   });
 
   it('limits five attempts per email/IP across login, registration and app instances', async () => {
