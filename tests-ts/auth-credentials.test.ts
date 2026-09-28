@@ -37,6 +37,21 @@ describe('username credentials', () => {
     ).toEqual({ username: 'demo_user', password: validPassword });
   });
 
+  it('does not Unicode-case-fold non-ASCII characters into valid ASCII', () => {
+    expect(normalizeUsername(' \u212AKEN ')).toBe('\u212Aken');
+    for (const parseCredentials of [
+      parseLoginCredentials,
+      parseRegisterCredentials,
+    ]) {
+      expectFieldError('username', () =>
+        parseCredentials({
+          username: '\u212Aen',
+          password: validPassword,
+        }),
+      );
+    }
+  });
+
   it.each(['ab', 'a'.repeat(33), 'demo-user', '利用者', 'demo user'])(
     'rejects an invalid username %j',
     (username) => {
