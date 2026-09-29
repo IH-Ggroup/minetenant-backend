@@ -286,7 +286,7 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     expect(rejected.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 
-  it('preserves CORS, no-store and session cookies on validation/auth/CSRF error responses', async () => {
+  it('preserves CORS and no-store while issuing cookies only for a valid session', async () => {
     const client = createClient(setup.app);
     await client.request('/api/v1/auth/csrf-cookie');
     for (const [path, method, status] of [
@@ -315,6 +315,7 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     expect(csrfError.headers.get('Access-Control-Allow-Origin')).toBe(
       'http://localhost:5173',
     );
-    expect(csrfError.headers.getSetCookie()).toHaveLength(2);
+    expect(csrfError.headers.get('Cache-Control')).toContain('no-store');
+    expect(csrfError.headers.getSetCookie()).toHaveLength(0);
   });
 });

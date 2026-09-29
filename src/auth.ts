@@ -22,6 +22,23 @@ interface SessionRow {
   expires_at: number;
 }
 
+const SESSION_BOOTSTRAP_LIMIT = 10;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+
+function sessionBootstrapKey(clientIp: string): string {
+  return createHash('sha256')
+    .update(`web-session-bootstrap-ip:${clientIp}`)
+    .digest('hex');
+}
+
+function writeBootstrapRateHeaders(
+  c: Context<AppEnv>,
+  remaining: number,
+): void {
+  c.header('X-RateLimit-Limit', String(SESSION_BOOTSTRAP_LIMIT));
+  c.header('X-RateLimit-Remaining', String(remaining));
+}
+
 function newSession(
   config: AppConfig,
   userId: string | null = null,
@@ -68,6 +85,26 @@ function writeCookies(
   c.header('Cache-Control', 'no-store, private');
 }
 
+function expireCookies(c: Context<AppEnv>, config: AppConfig): void {
+  const options = {
+    path: '/',
+    domain: config.sessionDomain,
+    secure: config.sessionSecure,
+    sameSite: config.sessionSameSite,
+    maxAge: 0,
+    expires: new Date(0),
+  };
+  setCookie(c, config.sessionCookie, '', {
+    ...options,
+    httpOnly: true,
+  });
+  setCookie(c, 'XSRF-TOKEN', '', {
+    ...options,
+    httpOnly: false,
+  });
+  c.header('Cache-Control', 'no-store, private');
+}
+
 function equalToken(expected: string, actual: string | undefined): boolean {
   if (actual === undefined) return false;
   const first = Buffer.from(expected);
@@ -81,17 +118,27 @@ export function sessionMiddleware(
   config: AppConfig,
 ): MiddlewareHandler<AppEnv> {
   let nextCleanup = 0;
-  return async (c, next) => {
-    const now = Date.now();
-    if (now >= nextCleanup) {
-      nextCleanup = now + 60_000;
+  let cleanupPromise: Promise<void> | undefined;
+
+  async function cleanupExpired(now: number): Promise<void> {
+    if (now < nextCleanup) return;
+    cleanupPromise ??= (async () => {
       await db.execute('DELETE FROM hono_sessions WHERE expires_at <= ?', [
         now,
       ]);
       await db.execute('DELETE FROM hono_rate_limits WHERE expires_at <= ?', [
         now,
       ]);
-    }
+      nextCleanup = Date.now() + RATE_LIMIT_WINDOW_MS;
+    })().finally(() => {
+      cleanupPromise = undefined;
+    });
+    await cleanupPromise;
+  }
+
+  return async (c, next) => {
+    const now = Date.now();
+    await cleanupExpired(now);
     const cookie = getCookie(c, config.sessionCookie);
     let session: AuthSession | undefined;
     if (cookie && /^[a-f0-9]{64}$/.test(cookie)) {
@@ -116,13 +163,9 @@ export function sessionMiddleware(
         }
       }
     }
-    if (!session) {
-      session = newSession(config);
-      await insertSession(db, session);
-    }
     c.set('session', session);
     let user: UserRow | undefined;
-    if (session.userId) {
+    if (session?.userId) {
       [user] = await db.query<UserRow>(
         'SELECT users.*, stores.store_id AS store_id FROM users LEFT JOIN stores ON stores.user_id = users.user_id WHERE users.user_id = ?',
         [session.userId],
@@ -132,6 +175,7 @@ export function sessionMiddleware(
 
     try {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+        if (!session) throw new HttpError(419, 'CSRF token mismatch.');
         let token =
           c.req.header('X-CSRF-TOKEN') ?? c.req.header('X-XSRF-TOKEN');
         if (!token) {
@@ -143,7 +187,8 @@ export function sessionMiddleware(
       }
       await next();
     } finally {
-      writeCookies(c, config, c.get('session') ?? session);
+      const responseSession = c.get('session');
+      if (responseSession) writeCookies(c, config, responseSession);
     }
   };
 }
@@ -153,7 +198,7 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-/** Rotate both identifiers at each authentication transition, including logout. */
+/** Rotate both identifiers after successful registration or login. */
 export async function rotateSession(
   c: Context<AppEnv>,
   db: Database,
@@ -170,6 +215,89 @@ export async function rotateSession(
     await insertSession(tx, replacement);
   });
   c.set('session', replacement);
+}
+
+/** Create anonymous sessions only through the explicit CSRF bootstrap route. */
+export async function bootstrapSession(
+  c: Context<AppEnv>,
+  db: Database,
+  config: AppConfig,
+): Promise<void> {
+  const now = Date.now();
+  const key = sessionBootstrapKey(c.get('clientIp'));
+  if (c.get('session')) {
+    const [row] = await db.query<{ hits: number; expires_at: number }>(
+      'SELECT hits, expires_at FROM hono_rate_limits WHERE key_hash = ?',
+      [key],
+    );
+    const hits =
+      row && Number(row.expires_at) > now
+        ? Math.min(SESSION_BOOTSTRAP_LIMIT, Math.max(0, Number(row.hits)))
+        : 0;
+    writeBootstrapRateHeaders(c, SESSION_BOOTSTRAP_LIMIT - hits);
+    return;
+  }
+
+  const session = newSession(config);
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(
+      'INSERT INTO hono_rate_limits (key_hash, hits, expires_at) VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE key_hash = VALUES(key_hash)',
+      [key, now + RATE_LIMIT_WINDOW_MS],
+    );
+    const [row] = await tx.query<{ hits: number; expires_at: number }>(
+      'SELECT hits, expires_at FROM hono_rate_limits WHERE key_hash = ? FOR UPDATE',
+      [key],
+    );
+    if (!row) throw new Error('Rate limit row disappeared.');
+
+    const reset = Number(row.expires_at) <= now || Number(row.hits) === 0;
+    const hits = reset ? 0 : Number(row.hits);
+    const expiresAt = reset
+      ? now + RATE_LIMIT_WINDOW_MS
+      : Number(row.expires_at);
+    if (hits >= SESSION_BOOTSTRAP_LIMIT) {
+      return { blocked: true as const, expiresAt };
+    }
+
+    await insertSession(tx, session);
+    await tx.execute(
+      'UPDATE hono_rate_limits SET hits = ?, expires_at = ? WHERE key_hash = ?',
+      [hits + 1, expiresAt, key],
+    );
+    return {
+      blocked: false as const,
+      expiresAt,
+      remaining: SESSION_BOOTSTRAP_LIMIT - hits - 1,
+    };
+  });
+
+  writeBootstrapRateHeaders(c, result.blocked ? 0 : result.remaining);
+  if (result.blocked) {
+    c.header(
+      'Retry-After',
+      String(Math.max(1, Math.ceil((result.expiresAt - now) / 1000))),
+    );
+    c.header('X-RateLimit-Reset', String(Math.ceil(result.expiresAt / 1000)));
+    throw new HttpError(429, 'Too Many Attempts.');
+  }
+  c.set('session', session);
+}
+
+/** Delete the authenticated session without creating an anonymous replacement. */
+export async function destroySession(
+  c: Context<AppEnv>,
+  db: Database,
+  config: AppConfig,
+): Promise<void> {
+  const session = c.get('session');
+  if (session) {
+    await db.execute('DELETE FROM hono_sessions WHERE session_id = ?', [
+      session.id,
+    ]);
+  }
+  c.set('session', undefined);
+  c.set('user', undefined);
+  expireCookies(c, config);
 }
 
 /** Database-backed limits remain effective across restarts and multiple processes. */

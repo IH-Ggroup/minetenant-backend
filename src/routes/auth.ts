@@ -2,7 +2,13 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { Hono } from 'hono';
 import emailValidator from 'validator';
-import { checkAuthRateLimit, requireAuth, rotateSession } from '../auth.js';
+import {
+  bootstrapSession,
+  checkAuthRateLimit,
+  destroySession,
+  requireAuth,
+  rotateSession,
+} from '../auth.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
 import { ValidationError } from '../domain/errors.js';
@@ -83,7 +89,12 @@ export function createAuthRoutes(
     config.bcryptRounds,
   );
 
-  routes.get('/csrf-cookie', (c) => c.body(null, 204));
+  routes.get('/csrf-cookie', async (c) => {
+    // Hono also dispatches HEAD to GET handlers. Only an explicit GET may
+    // create an anonymous session.
+    if (c.req.method === 'GET') await bootstrapSession(c, db, config);
+    return c.body(null, 204);
+  });
 
   routes.post('/register', async (c) => {
     const body = await parseBody(c.req.raw);
@@ -194,8 +205,7 @@ export function createAuthRoutes(
     c.json({ data: serializeUser(c.get('user')!) }),
   );
   routes.post('/logout', requireAuth, async (c) => {
-    await rotateSession(c, db, config, null);
-    c.set('user', undefined);
+    await destroySession(c, db, config);
     return c.body(null, 204);
   });
   return routes;

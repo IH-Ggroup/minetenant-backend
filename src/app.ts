@@ -87,6 +87,12 @@ export function createApp({
     origin: (origin) => (config.corsOrigins.includes(origin) ? origin : ''),
     credentials: true,
     allowMethods: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
+    exposeHeaders: [
+      'X-RateLimit-Limit',
+      'X-RateLimit-Remaining',
+      'Retry-After',
+      'X-RateLimit-Reset',
+    ],
     maxAge: 3600,
   });
   app.use(
