@@ -121,6 +121,37 @@ describe('session user serializer', () => {
     ).toMatchObject({ displayName, avatarInitial });
   });
 
+  it.each([
+    ['minimum length', 'abc'],
+    ['maximum length', 'a'.repeat(32)],
+    ['lowercase letters, numbers and underscore', 'user_123'],
+    ['existing demo account', 'demo'],
+    ['existing seller account', 'seller'],
+  ])('accepts a canonical username for %s', (_case, username) => {
+    expect(serializeSessionUser(sessionRow({ username }))).toMatchObject({
+      username,
+    });
+  });
+
+  it.each([
+    ['leading whitespace', '  demo'],
+    ['trailing whitespace', 'demo '],
+    ['embedded whitespace', 'de mo'],
+    ['whitespace only', '   '],
+    ['an empty value', ''],
+    ['fewer than 3 characters', 'ab'],
+    ['more than 32 characters', 'a'.repeat(33)],
+    ['uppercase ASCII', 'Demo'],
+    ['a hyphen', 'demo-user'],
+    ['a dot', 'demo.user'],
+    ['non-ASCII characters', 'démo'],
+    ['Unicode case-folding characters', '\u212Aelvin'],
+    ['a zero-width space', 'demo\u200Buser'],
+    ['a NUL character', 'demo\0user'],
+  ])('fails closed for a username with %s', (_case, username) => {
+    expectInvalid(sessionRow({ username }));
+  });
+
   it('never returns legacy columns, secrets, session data or DB names', () => {
     const row = Object.assign(sessionRow(), {
       name: 'legacy-name',

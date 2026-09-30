@@ -1,3 +1,4 @@
+import { isCanonicalUsername } from './auth-credentials.js';
 import type {
   ProductRow,
   SessionUser,
@@ -110,7 +111,7 @@ export function serializeSessionUser(user: SessionUserRow): SessionUser {
     typeof user.user_id !== 'string' ||
     user.user_id.length === 0 ||
     typeof user.username !== 'string' ||
-    user.username.length === 0 ||
+    !isCanonicalUsername(user.username) ||
     typeof user.display_name !== 'string' ||
     user.display_name.length === 0 ||
     user.display_name.trim() !== user.display_name ||
