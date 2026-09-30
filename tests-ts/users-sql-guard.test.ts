@@ -1,5 +1,5 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, relative } from 'node:path';
+import { extname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -80,17 +80,18 @@ function findForbiddenUsersStatements(
   return violations;
 }
 
-function normalizePathSeparators(path: string): string {
-  return path.replaceAll('\\', '/');
+function normalizePathSeparators(path: string, pathSeparator: string): string {
+  return path.split(pathSeparator).join('/');
 }
 
 function isAllowedDynamicStatementAtPath(
   repositoryPath: string,
   violation: ForbiddenUsersStatement,
+  pathSeparator = sep,
 ): boolean {
   return (
     allowedDynamicStatements
-      .get(normalizePathSeparators(repositoryPath))
+      .get(normalizePathSeparators(repositoryPath, pathSeparator))
       ?.has(`${violation.name}:${violation.target}`) ?? false
   );
 }
@@ -126,8 +127,23 @@ describe('users SQL safety guard', () => {
           index: 0,
           target: 'PRODUCT_STATUS_PRODUCT_AUDIT_TABLE',
         },
+        '\\',
       ),
     ).toBe(true);
+  });
+
+  it('does not treat a literal backslash in a POSIX filename as a separator', () => {
+    expect(
+      isAllowedDynamicStatementAtPath(
+        String.raw`src\db\migrations\0002-product-status.ts`,
+        {
+          name: 'INSERT IGNORE',
+          index: 0,
+          target: 'PRODUCT_STATUS_PRODUCT_AUDIT_TABLE',
+        },
+        '/',
+      ),
+    ).toBe(false);
   });
 
   it.each([
