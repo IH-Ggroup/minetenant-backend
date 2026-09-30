@@ -148,6 +148,8 @@ async function withCheckedConnection<T>(
   };
   try {
     try {
+      // Both round trips are intentional on every checkout. Caching verification
+      // by physical connection could miss session state changed by a prior lease.
       await prepareConnection(connection);
     } catch (error) {
       lease.discard();

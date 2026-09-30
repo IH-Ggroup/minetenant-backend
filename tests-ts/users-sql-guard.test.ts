@@ -80,14 +80,28 @@ function findForbiddenUsersStatements(
   return violations;
 }
 
-function isAllowedDynamicStatement(
-  file: string,
+function normalizePathSeparators(path: string): string {
+  return path.replaceAll('\\', '/');
+}
+
+function isAllowedDynamicStatementAtPath(
+  repositoryPath: string,
   violation: ForbiddenUsersStatement,
 ): boolean {
   return (
     allowedDynamicStatements
-      .get(relative(repositoryRoot, file))
+      .get(normalizePathSeparators(repositoryPath))
       ?.has(`${violation.name}:${violation.target}`) ?? false
+  );
+}
+
+function isAllowedDynamicStatement(
+  file: string,
+  violation: ForbiddenUsersStatement,
+): boolean {
+  return isAllowedDynamicStatementAtPath(
+    relative(repositoryRoot, file),
+    violation,
   );
 }
 
@@ -103,6 +117,19 @@ async function sourceFiles(directory: string): Promise<string[]> {
 }
 
 describe('users SQL safety guard', () => {
+  it('normalizes Windows path separators before allowlist lookup', () => {
+    expect(
+      isAllowedDynamicStatementAtPath(
+        String.raw`src\db\migrations\0002-product-status.ts`,
+        {
+          name: 'INSERT IGNORE',
+          index: 0,
+          target: 'PRODUCT_STATUS_PRODUCT_AUDIT_TABLE',
+        },
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ['INSERT IGNORE INTO users (user_id) VALUES (?)', 'INSERT IGNORE'],
     [
