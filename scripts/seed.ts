@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import { hash } from 'bcryptjs';
 import { pathToFileURL } from 'node:url';
-import { readConfig } from '../src/config.js';
+import { readConfig, type AppConfig } from '../src/config.js';
 import { createDatabase, type Database } from '../src/db.js';
+import { formatErrorForLog } from '../src/diagnostics.js';
 
 const products = [
   [
@@ -207,6 +208,10 @@ export async function seedDemo(
   });
 }
 
+export function formatSeedError(error: unknown, config: AppConfig): string {
+  return formatErrorForLog('SEED_FAILED', error, config);
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -221,6 +226,9 @@ if (
         ? 'Demo data created.'
         : 'Existing data preserved; seeding skipped.',
     );
+  } catch (error) {
+    console.error(formatSeedError(error, config));
+    process.exitCode = 1;
   } finally {
     await db.close();
   }

@@ -125,6 +125,48 @@ export function databaseDiagnostic(
         action:
           'MySQL 8.0.17以上を使用し、npm run doctor を再実行してください。',
       };
+    case 'MINETENANT_DB_SESSION_INITIALIZATION_FAILED':
+      return {
+        code,
+        summary: 'MySQL接続sessionの初期化に失敗しました。',
+        action:
+          "接続用ユーザーが SET SESSION time_zone = '+00:00' を実行できることとDB proxyの設定を確認し、npm run doctor を再実行してください。",
+      };
+    case 'MINETENANT_DB_SESSION_VERIFICATION_FAILED':
+      return {
+        code,
+        summary: 'MySQL接続sessionの設定を確認できません。',
+        action:
+          '接続用ユーザーがsession変数を参照できることとDB proxyの設定を確認し、npm run doctor を再実行してください。',
+      };
+    case 'MINETENANT_DB_SESSION_STATE_INVALID':
+      return {
+        code,
+        summary: 'MySQLから想定外のsession設定が返されました。',
+        action:
+          'MySQL 8.0.17以上に接続していることとDB proxyのsession変数の互換性を確認し、npm run doctor を再実行してください。',
+      };
+    case 'MINETENANT_DB_UTC_REQUIRED':
+      return {
+        code,
+        summary: 'MySQL接続のtime zoneをUTCに固定できません。',
+        action:
+          "DB proxyを含む接続設定で SET SESSION time_zone = '+00:00' が保持されるように修正し、npm run doctor を再実行してください。",
+      };
+    case 'MINETENANT_DB_STRICT_MODE_REQUIRED':
+      return {
+        code,
+        summary: 'MySQL接続でstrict SQL modeが有効ではありません。',
+        action:
+          '接続sessionの sql_mode に STRICT_TRANS_TABLES または STRICT_ALL_TABLES を追加し、npm run doctor を再実行してください。',
+      };
+    case 'MINETENANT_DB_TRANSACTION_COMMIT_FAILED':
+      return {
+        code,
+        summary: 'DB transactionのcommit結果を確認できませんでした。',
+        action:
+          'DB接続を確認し、同じ操作を再送する前にrequestIdなどの結果照会手段で成立済みか確認してください。接続復旧後に npm run doctor を再実行してください。',
+      };
     case 'EADDRINUSE':
       return {
         code,
