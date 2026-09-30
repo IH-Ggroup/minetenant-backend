@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { formatMigrationError } from '../scripts/migrate.js';
+import { formatSeedError } from '../scripts/seed.js';
 import { readConfig } from '../src/config.js';
+import { DatabaseConnectionError } from '../src/db.js';
 import { AuthBackfillDataError } from '../src/db/auth-backfill.js';
 import {
   databaseDiagnostic,
@@ -87,6 +89,66 @@ describe('database diagnostics', () => {
     expect(output).toContain('db:bootstrap');
     expect(output).toContain('TRIGGER');
     expect(output).not.toContain(error.message);
+  });
+
+  it.each([
+    ['MINETENANT_DB_SESSION_INITIALIZATION_FAILED', 'SET SESSION'],
+    ['MINETENANT_DB_SESSION_VERIFICATION_FAILED', 'session変数'],
+    ['MINETENANT_DB_SESSION_STATE_INVALID', 'DB proxy'],
+    ['MINETENANT_DB_UTC_REQUIRED', "time_zone = '+00:00'"],
+    ['MINETENANT_DB_STRICT_MODE_REQUIRED', 'STRICT_TRANS_TABLES'],
+    ['MINETENANT_DB_TRANSACTION_COMMIT_FAILED', 'requestId'],
+  ])(
+    'explains %s without exposing nested database details',
+    (code, expectedAction) => {
+      const errorMessage = `wrapper-message:${config.dbPassword}`;
+      const causeMessage = `driver-cause:${config.dbPassword}`;
+      const error = Object.assign(
+        new Error(errorMessage, { cause: new Error(causeMessage) }),
+        {
+          code,
+          sql: 'SELECT private_column FROM private_table',
+        },
+      );
+
+      const output = formatErrorForLog('API_STARTUP_FAILED', error, config);
+
+      expect(output).toContain(code);
+      expect(output).toContain(expectedAction);
+      expect(output).toContain('npm run doctor');
+      expect(output).not.toContain(errorMessage);
+      expect(output).not.toContain(causeMessage);
+      expect(output).not.toContain(config.dbPassword);
+      expect(output).not.toContain(error.sql);
+    },
+  );
+
+  it('keeps the direct seed command free of nested driver details', () => {
+    const driverError = Object.assign(
+      new Error(`driver-cause:${config.dbPassword}`),
+      {
+        code: 'ER_PARSE_ERROR',
+        sql: 'INSERT INTO users (password_hash) VALUES (?)',
+        values: [
+          'password-hash:$2b$12$never-print-this-value',
+          'session-token:never-print-this-value',
+          'sql-parameter:never-print-this-value',
+        ],
+      },
+    );
+    const error = new DatabaseConnectionError(
+      'MINETENANT_DB_SESSION_INITIALIZATION_FAILED',
+      `wrapper-message:${config.dbPassword}`,
+      { cause: driverError },
+    );
+
+    const output = formatSeedError(error, config);
+
+    expect(output).toContain('MINETENANT_DB_SESSION_INITIALIZATION_FAILED');
+    expect(output).not.toContain(config.dbPassword);
+    expect(output).not.toContain(driverError.message);
+    expect(output).not.toContain(driverError.sql);
+    for (const value of driverError.values) expect(output).not.toContain(value);
   });
 
   it('keeps auth migration diagnostics free of row identifiers and secrets', () => {

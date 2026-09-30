@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import { serve } from '@hono/node-server';
+import { pathToFileURL } from 'node:url';
 import { createApp } from './app.js';
-import { readConfig } from './config.js';
-import { createDatabase } from './db.js';
+import { readConfig, type AppConfig } from './config.js';
+import { createDatabase, type Database } from './db.js';
 import { assertMigrationsCurrent, migrations } from './db/migrations/index.js';
 import { formatErrorForLog } from './diagnostics.js';
 import {
@@ -10,10 +11,24 @@ import {
   assertDatabaseServerSupported,
 } from './readiness.js';
 
-async function start(): Promise<void> {
+export interface ServerDependencies {
+  readConfig(): AppConfig;
+  createDatabase(config: AppConfig): Database;
+  serve: typeof serve;
+}
+
+const defaultDependencies: ServerDependencies = {
+  readConfig,
+  createDatabase,
+  serve,
+};
+
+export async function start(
+  dependencies: ServerDependencies = defaultDependencies,
+): Promise<void> {
   let config;
   try {
-    config = readConfig();
+    config = dependencies.readConfig();
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : '設定を確認してください。';
@@ -22,7 +37,7 @@ async function start(): Promise<void> {
     return;
   }
 
-  const db = createDatabase(config);
+  const db = dependencies.createDatabase(config);
   try {
     await assertDatabaseServerSupported(db, config.dbDatabase);
     await assertMigrationsCurrent(db, migrations);
@@ -35,7 +50,7 @@ async function start(): Promise<void> {
   }
 
   const app = createApp({ db, config });
-  const server = serve(
+  const server = dependencies.serve(
     { fetch: app.fetch, hostname: config.host, port: config.port },
     () => {
       console.log(`MineTenant Hono API: http://${config.host}:${config.port}`);
@@ -67,4 +82,9 @@ async function start(): Promise<void> {
   process.on('SIGTERM', shutdown);
 }
 
-await start();
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
+  await start();
+}

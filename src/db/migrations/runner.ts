@@ -206,10 +206,18 @@ export async function runMigrations(
     if (!server.versionSupported) throw new DatabaseReadinessError(server);
 
     const lockName = migrationLockName(current.databaseName);
-    const [lock] = await db.query<LockRow>('SELECT GET_LOCK(?, ?) AS result', [
-      lockName,
-      lockTimeoutSeconds,
-    ]);
+    let lock: LockRow | undefined;
+    try {
+      [lock] = await db.query<LockRow>('SELECT GET_LOCK(?, ?) AS result', [
+        lockName,
+        lockTimeoutSeconds,
+      ]);
+    } catch (error) {
+      // The server may have acquired the lock before the response was lost.
+      // Closing this physical connection is the only reliable release path.
+      lease.discard();
+      throw error;
+    }
     if (Number(lock?.result) !== 1) {
       fail(
         'MINETENANT_MIGRATION_LOCK_TIMEOUT',

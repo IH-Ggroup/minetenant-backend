@@ -554,9 +554,17 @@ export async function runAuthBackfill(
     }
 
     const lockName = authBackfillLockName(current.databaseName);
-    const [lock] = await db.query<LockRow>('SELECT GET_LOCK(?, 0) AS result', [
-      lockName,
-    ]);
+    let lock: LockRow | undefined;
+    try {
+      [lock] = await db.query<LockRow>('SELECT GET_LOCK(?, 0) AS result', [
+        lockName,
+      ]);
+    } catch (error) {
+      // The server may have acquired the lock before the response was lost.
+      // Closing this physical connection is the only reliable release path.
+      lease.discard();
+      throw error;
+    }
     if (Number(lock?.result) !== 1) {
       operationalFailure(
         'MINETENANT_AUTH_BACKFILL_LOCK_UNAVAILABLE',
