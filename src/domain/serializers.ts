@@ -1,10 +1,43 @@
+import { isCanonicalUsername } from './auth-credentials.js';
 import type {
   ProductRow,
+  SessionUser,
+  SessionUserRow,
   StoreRow,
   Timestamp,
   TransactionRow,
   UserRow,
 } from './types.js';
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, {
+  granularity: 'grapheme',
+});
+
+export class SessionUserSerializationError extends Error {
+  readonly code = 'MINETENANT_AUTH_SESSION_USER_INVALID';
+
+  constructor() {
+    super('The authenticated user row cannot be serialized.');
+    this.name = 'SessionUserSerializationError';
+  }
+}
+
+function invalidSessionUser(): never {
+  throw new SessionUserSerializationError();
+}
+
+function sessionRoleLabel(
+  role: SessionUserRow['role'],
+): SessionUser['roleLabel'] {
+  switch (role) {
+    case 'buyer':
+      return '購入者';
+    case 'seller':
+      return '出品者';
+    default:
+      return invalidSessionUser();
+  }
+}
 
 // API timestamps use UTC with six fractional digits.
 export function serializeTimestamp(value: Timestamp): string | null {
@@ -68,5 +101,39 @@ export function serializeUser(user: UserRow) {
     roleLabel: user.role_label,
     avatarInitial: user.avatar_initial,
     storeId: user.store_id ?? null,
+  };
+}
+
+export function serializeSessionUser(user: SessionUserRow): SessionUser {
+  if (
+    typeof user !== 'object' ||
+    user === null ||
+    typeof user.user_id !== 'string' ||
+    user.user_id.length === 0 ||
+    typeof user.username !== 'string' ||
+    !isCanonicalUsername(user.username) ||
+    typeof user.display_name !== 'string' ||
+    user.display_name.length === 0 ||
+    user.display_name.trim() !== user.display_name ||
+    typeof user.password_hash !== 'string' ||
+    user.password_hash.length === 0 ||
+    (user.store_id !== null &&
+      (typeof user.store_id !== 'string' || user.store_id.length === 0))
+  ) {
+    invalidSessionUser();
+  }
+
+  const segments = graphemeSegmenter.segment(user.display_name);
+  const first = segments[Symbol.iterator]().next();
+  if (first.done) invalidSessionUser();
+
+  return {
+    id: user.user_id,
+    username: user.username,
+    displayName: user.display_name,
+    role: user.role,
+    roleLabel: sessionRoleLabel(user.role),
+    avatarInitial: first.value.segment,
+    storeId: user.store_id,
   };
 }

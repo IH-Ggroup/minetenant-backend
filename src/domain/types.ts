@@ -19,18 +19,40 @@ export type ProductTheme = (typeof productThemes)[number];
 export type ProductStatus = 'available' | 'sold';
 export type PurchaseSource = 'web' | 'minecraft';
 export type Timestamp = string | Date | null;
+export type UserRole = 'buyer' | 'seller';
 
 export interface UserRow {
   user_id: string;
   name: string;
   email: string;
   password: string;
-  role: 'buyer' | 'seller';
+  role: UserRole;
   role_label: string;
   avatar_initial: string;
   store_id?: string | null;
   created_at?: Timestamp;
   updated_at?: Timestamp;
+}
+
+/** Transitional auth row used only by username-based session endpoints. */
+export interface SessionUserRow {
+  user_id: string;
+  username: string | null;
+  display_name: string | null;
+  password_hash: string | null;
+  role: UserRole;
+  store_id: string | null;
+}
+
+/** Public user contract shared by register, login and me. */
+export interface SessionUser {
+  readonly id: string;
+  readonly username: string;
+  readonly displayName: string;
+  readonly role: UserRole;
+  readonly roleLabel: '購入者' | '出品者';
+  readonly avatarInitial: string;
+  readonly storeId: string | null;
 }
 
 export interface StoreRow {

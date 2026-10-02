@@ -12,6 +12,11 @@ export interface RegisterCredentials extends LoginCredentials {
 const usernamePattern = /^[a-z0-9_]{3,32}$/;
 const reservedUsernames = new Set(['demo', 'seller']);
 
+/** Check an already-normalized username without changing the stored value. */
+export function isCanonicalUsername(value: string): boolean {
+  return usernamePattern.test(value);
+}
+
 function addError(
   errors: ValidationErrors,
   field: string,
@@ -40,7 +45,7 @@ function parseUsername(
   }
 
   const username = normalizeUsername(value);
-  if (!usernamePattern.test(username)) {
+  if (!isCanonicalUsername(username)) {
     addError(
       errors,
       'username',
