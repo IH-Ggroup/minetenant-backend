@@ -19,6 +19,7 @@ export interface AppConfig {
   publicTunnel: boolean;
   originToken: string;
   salePoints: number;
+  usernameAuthEnabled: boolean;
 }
 
 function integer(
@@ -35,6 +36,20 @@ function integer(
     );
   }
   return number;
+}
+
+function booleanFlag(
+  name: string,
+  value: string | undefined,
+  required: boolean,
+): boolean {
+  if (value === undefined) {
+    if (required) throw new Error(`${name} must be explicitly set.`);
+    return false;
+  }
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be exactly true or false.`);
 }
 
 export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -87,6 +102,11 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     salePoints: Math.max(
       0,
       integer(env.STORE_SALE_POINTS, 100, -4294967295, 4294967295),
+    ),
+    usernameAuthEnabled: booleanFlag(
+      'USERNAME_AUTH_ENABLED',
+      env.USERNAME_AUTH_ENABLED,
+      appEnv === 'production',
     ),
   };
 }

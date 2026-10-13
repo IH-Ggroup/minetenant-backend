@@ -24,8 +24,10 @@ HTTP契約は[`api.md`](./api.md)、完成時schemaとbackfill規則は[`databas
 - production backupと復旧先を確認し、実行者・開始時刻・対象commitを#118へ記録している
 - Frontend #94はまだusername-only trafficへ切り替わっていない
 
-`USERNAME_AUTH_ENABLED=false`では現行email endpointと旧serializerだけを公開し、新認証codeへ
-trafficを流しません。最初のcutover成功後から#106まではproduction設定を明示的な`true`へ固定し、
+`USERNAME_AUTH_ENABLED=false`ではlegacy email endpointと旧serializerだけを公開し、新認証codeへ
+trafficを流しません。個別の#101 / #102 / #103をmergeしても共有環境は`false`を維持し、#118の
+maintenance windowでだけ一括して有効化します。最初のcutover成功後から#106まではproduction設定を
+明示的な`true`へ固定し、
 欠落または`false`の通常deployを失敗させます。#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
 途中commitをproductionへdeployしません。#106まで含む一つの互換削除maintenance releaseで、legacy
 login / me / users / register、旧列access、最後のfalse branch、config、testを同時に削除します。
@@ -148,9 +150,9 @@ emailではloginできない中間状態を作りません。#109はこのreleas
 ## Password rehashと互換期間
 
 password hashの正本は最初のcutoverまでは旧`password`、cutover成功後は新`password_hash`です。
-#98以降の現行email loginは、照合後にcostを上げる場合だけ旧`password`をbinary CAS条件にして、同じ
-新hashを`password`と`password_hash`へ一つのUPDATEで書きます。これにより#101が入る前でも
-`db:auth-backfill`がhash差分で停止しません。#101のgate false経路もこの動作を引き継ぎ、gate trueのloginは
+gate falseのemail loginは、照合後にcostを上げる場合だけ旧`password`をbinary CAS条件にして、同じ
+新hashを`password`と`password_hash`へ一つのUPDATEで書きます。これによりcutover前のrehash後も
+`db:auth-backfill`がhash差分で停止しません。gate trueのloginは
 `password_hash`をbinary CAS条件にして両列を同じhashへ更新します。CASが0件なら再読込・再照合し、
 古いhashで新しいhashを上書きしません。#103のregisterも最初から両列へ同じhashを書きます。
 #105まではloginが両列を更新し、#105で旧passwordのread / writeをloginから削除します。registerは

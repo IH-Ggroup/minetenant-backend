@@ -81,6 +81,30 @@ export async function parseBody(request: Request): Promise<Input> {
   return normalize(body) as Input;
 }
 
+export async function parseJsonBody(request: Request): Promise<Input> {
+  const mediaType = (request.headers.get('content-type') ?? '')
+    .split(';', 1)[0]!
+    .trim()
+    .toLowerCase();
+  if (
+    mediaType !== 'application/json' &&
+    !/^application\/[!#$%&'*+.^_`|~0-9a-z-]+\+json$/.test(mediaType)
+  ) {
+    throw new HttpError(415, 'Content-Type must be application/json.');
+  }
+
+  const text = await request.text();
+  let body: unknown;
+  try {
+    body = text === '' ? {} : JSON.parse(text);
+  } catch {
+    throw new HttpError(400, 'Invalid JSON.');
+  }
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    return {};
+  return body as Input;
+}
+
 interface CommonOptions {
   required?: boolean;
   nullable?: boolean;

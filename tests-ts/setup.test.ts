@@ -498,6 +498,7 @@ describe('setup command boundaries', () => {
             env: {
               ...process.env,
               APP_ENV: 'production',
+              USERNAME_AUTH_ENABLED: 'false',
               DB_CONNECTION: 'mysql',
               DB_HOST: '127.0.0.1',
               DB_PORT: '1',
