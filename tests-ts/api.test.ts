@@ -219,6 +219,46 @@ describe('Hono API on MySQL', () => {
     await expectStatus(await guest.request('/api/v1/products/missing'), 404);
   });
 
+  it('excludes soft-deleted products from every public list filter', async () => {
+    await test.db.execute(
+      'UPDATE products SET deleted_at = CURRENT_TIMESTAMP(6) WHERE product_id = ?',
+      ['product-lamp'],
+    );
+
+    const checks = [
+      [
+        '/api/v1/products',
+        [
+          'product-hoodie',
+          'product-stool',
+          'product-notebook',
+          'product-pendant',
+          'product-toolbag',
+        ],
+      ],
+      [
+        '/api/v1/products?storeId=store-yamada',
+        ['product-pendant', 'product-toolbag'],
+      ],
+      ['/api/v1/products?keyword=%E6%9A%96%E8%89%B2', []],
+      ['/api/v1/products?storeId=store-yamada&keyword=%E6%A3%AE', []],
+    ] as const;
+
+    for (const [path, expectedIds] of checks) {
+      const { data } = await body(await guest.request(path));
+      expect(data.map((product: { id: string }) => product.id)).toEqual(
+        expectedIds,
+      );
+    }
+
+    const { data } = await body(await guest.request('/api/v1/products'));
+    expect(
+      data
+        .filter((product: { status: string }) => product.status === 'sold')
+        .map((product: { id: string }) => product.id),
+    ).toEqual(['product-stool', 'product-notebook']);
+  });
+
   it('combines trimmed name/description keyword search with store filtering', async () => {
     const checks = [
       [{ keyword: '  スツール  ' }, ['product-stool']],
