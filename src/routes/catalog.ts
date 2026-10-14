@@ -20,6 +20,7 @@ import {
 } from '../domain/types.js';
 import { parseBody, parseQuery, Validator } from '../domain/validation.js';
 import { createProduct, deleteProduct } from '../services/products.js';
+import { listPublicProducts } from '../services/public-products.js';
 import { getStoreDashboard } from '../services/store-dashboard.js';
 import type { AppEnv } from '../types.js';
 
@@ -44,21 +45,7 @@ export function createCatalogRoutes(
     }
     validator.throwIfInvalid();
 
-    const where: string[] = [];
-    const params: unknown[] = [];
-    if (storeId) {
-      where.push('store_id = ?');
-      params.push(storeId);
-    }
-    if (keyword !== '') {
-      const pattern = `%${keyword.replace(/[!%_]/g, (character) => `!${character}`)}%`;
-      where.push("(name LIKE ? ESCAPE '!' OR description LIKE ? ESCAPE '!')");
-      params.push(pattern, pattern);
-    }
-    const products = await db.query<ProductRow>(
-      `SELECT * FROM products${where.length ? ` WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC`,
-      params,
-    );
+    const products = await listPublicProducts(db, { storeId, keyword });
     return c.json({ data: products.map(serializeProduct) });
   });
 
