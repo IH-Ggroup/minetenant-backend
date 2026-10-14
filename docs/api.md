@@ -11,11 +11,12 @@ camelCaseで返します。
 > Product responseは`status`へ移行しました。一方、出品・購入writerは物理`stock`との互換期間中で、
 > 店舗pointsも販売店舗だけへ加算するため、後続Issue完了までは一部の動作が異なります。
 >
-> 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。同じ`develop`の
-> runtimeはまだemail / `name`認証です。B-AUTH-01〜12、B-AUTH-CUTOVER #118、
-> B-AUTH-SESSION #119、B-DB-STRICT-MODE #120、B-AUTH-CONTRACT-CUTOVER #121、
-> Frontend F-AUTH-01の段階移行中は、
-> この節の「移行順と互換期間」を併せて参照してください。取引履歴とFabric APIの認証・pathは
+> 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。段階移行中は
+> `USERNAME_AUTH_ENABLED=false`でemail / `name`の互換経路と旧serializerだけを公開し、
+> `true`では実装済みendpointのusername経路と期限付きのlegacy互換を使います。共有環境は
+> B-AUTH-CUTOVER #118まで`false`を維持します。B-AUTH-01〜12、B-AUTH-SESSION #119、
+> B-DB-STRICT-MODE #120、B-AUTH-CONTRACT-CUTOVER #121、Frontend F-AUTH-01の段階移行中は、
+> この節の「移行順と互換期間」も参照してください。取引履歴とFabric APIの認証・pathは
 > 現行実装の説明です。ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
 > 店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
 
@@ -219,8 +220,9 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 
 ## 認証とCSRF
 
-この節の「完成時契約」はB-CONTRACT-07の正本です。2026-09-26時点の`develop`はまだ
-email / `name`認証なので、実装・deploy時は末尾の「移行順と互換期間」も参照してください。
+この節の「完成時契約」はB-CONTRACT-07の正本です。段階移行中の実際の経路は
+`USERNAME_AUTH_ENABLED`と各endpointの実装状況で決まるため、末尾の「移行順と互換期間」も
+参照してください。共有環境では#118のcutoverまで`false`を維持します。
 
 ### 完成時のSessionとCSRF
 
@@ -439,6 +441,16 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
+`USERNAME_AUTH_ENABLED=true`の互換期間では、上記の`{ username, password }`を正としながら、
+#105・#121まで旧`{ email, password }`もJSONとして受理します。両方のidentifierを送ったrequestは
+422とし、`errors.username`と`errors.email`の両方を返します。旧emailが実在・syntheticのどちらでも、
+保存済みusernameへ解決して同じ認証・rate-limit経路を使います。未知emailとpassword不一致も、
+未知usernameと同じform-level 401です。
+
+この期間のlogin成功responseだけは、7 fieldのUser DTOへ`"name": dto.displayName`を加えます。
+これは旧Front向けのroute-local adapterであり、emailやpassword hashは返しません。#105・#121の
+互換削除releaseでlogin responseから`name`を削除します。
+
 形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
 どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
 timing差を縮小します。`errors.username`は付けません。
@@ -553,9 +565,9 @@ Unix秒の`X-RateLimit-Reset`を返します。
 }
 ```
 
-### 現行runtime（username移行前）
+### `USERNAME_AUTH_ENABLED=false`の互換runtime
 
-以下は移行開始前の接続確認用で、完成時の公開契約ではありません。
+以下はgateを無効にした環境の接続確認用で、完成時の公開契約ではありません。
 
 最初に`GET /api/v1/auth/csrf-cookie`を`credentials: 'include'`付きで呼びます。
 ブラウザへセッションCookieと`XSRF-TOKEN` Cookieが設定されます。
@@ -570,7 +582,7 @@ CSRFトークンを固定の変数へ保存せず、書き込みのたびにCook
 `$2b$`・`$2y$`のどちらも照合できます。`XSRF-TOKEN` Cookieと
 `X-XSRF-TOKEN`ヘッダーを組み合わせてCSRFを検証します。
 
-#### 現行の新規登録
+#### legacy新規登録
 
 ```http
 POST /api/v1/auth/register
@@ -595,7 +607,7 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 `201 Created`と`data: User`を返します。店舗は`level: 1`、0 points、`offline`から
 始まります。登録ユーザーの`role`は`buyer`ですが、自分の店舗に出品できます。
 
-#### 現行のログイン・状態復元・ログアウト
+#### legacyログイン・状態復元・ログアウト
 
 ```http
 POST /api/v1/auth/login
@@ -656,12 +668,20 @@ register route scopeに含まれないため、[B-AUTH-CUTOVER #118](https://git
 運用手順は[`auth-cutover.md`](./auth-cutover.md)です。#103の二重書き込みが有効になる前に#101 / #102へ
 trafficを流さず、#109の最終backfillをcutover確認の代わりにしません。
 
-#101で`USERNAME_AUTH_ENABLED`を追加し、#102 / #103も同じgateを使います。local / testでは欠落時
+`USERNAME_AUTH_ENABLED`は#101〜#103が共有するcutover gateです。local / testでは欠落時
 `false`、`APP_ENV=production`では明示設定を必須とし、欠落・空文字・`true` / `false`以外は設定errorで
-起動しません。`false`では現行email endpointと旧serializerだけを実行し、新認証codeへtrafficを
-流しません。#103はcutover後の新旧register
-requestを新旧列へ互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
+起動しません。`false`ではlegacy email endpointと旧serializerだけを実行し、新認証codeへtrafficを
+流しません。`true`では実装済みendpointの新経路を使い、loginは`{ username, password }`を正として
+期限付きの旧`{ email, password }`も受理します。#103はcutover後の新旧register requestを新旧列へ
+互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
 利用者へ旧email loginを透過的に提供できないため、runbookどおりmaintenanceとforward-fixを優先します。
+
+#101のgate true経路が変更するのは`POST /auth/login`だけです。registerとmeはそれぞれ#103と#102が
+同じgateへ接続するまでlegacy経路を維持し、logoutは#101では変更しません。
+
+個別の#101 / #102 / #103をmergeした時点では、共有Backendの設定を`true`へ変更しません。
+#118で全API maintenance、backfill、全instanceの同一release確認を完了してから一括で有効化します。
+Frontend #94の共有環境への実API接続・mergeも、この#118のcutover完了を前提にします。
 
 認証cutover後も、旧login `{ email, password }`は#105が完了するまで、旧register
 `{ name, email, password, password_confirmation? }`は#106が完了するまで受理します。新旧fieldを

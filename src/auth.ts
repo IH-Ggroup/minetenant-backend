@@ -179,8 +179,16 @@ export function sessionMiddleware(
         let token =
           c.req.header('X-CSRF-TOKEN') ?? c.req.header('X-XSRF-TOKEN');
         if (!token) {
-          const body = await parseBody(c.req.raw.clone());
-          token = typeof body._token === 'string' ? body._token : undefined;
+          try {
+            const body = await parseBody(c.req.raw.clone());
+            token = typeof body._token === 'string' ? body._token : undefined;
+          } catch (error) {
+            // A malformed body cannot prove possession of the session token.
+            // Keep CSRF ahead of route-specific JSON parsing in this case.
+            if (error instanceof HttpError && error.status === 400)
+              throw new HttpError(419, 'CSRF token mismatch.');
+            throw error;
+          }
         }
         if (!equalToken(session.csrfToken, token))
           throw new HttpError(419, 'CSRF token mismatch.');
@@ -304,13 +312,40 @@ export async function destroySession(
 export async function checkAuthRateLimit(
   c: Context<AppEnv>,
   db: Database,
-  email: string,
+  resolveAccountKey: () => string | Promise<string>,
 ): Promise<void> {
   const now = Date.now();
   const ip = c.get('clientIp');
+  const ipKey = createHash('sha256').update(`web-auth-ip:${ip}`).digest('hex');
+
+  // Do not perform an account lookup for traffic that the IP bucket already
+  // blocks. The transaction below checks this bucket again to close the race
+  // between this read-only fast path and concurrent requests.
+  const [ipRow] = await db.query<{ hits: number; expires_at: number }>(
+    'SELECT hits, expires_at FROM hono_rate_limits WHERE key_hash = ?',
+    [ipKey],
+  );
+  if (ipRow && Number(ipRow.expires_at) > now && Number(ipRow.hits) >= 30) {
+    const expiresAt = Number(ipRow.expires_at);
+    c.header('X-RateLimit-Limit', '30');
+    c.header('X-RateLimit-Remaining', '0');
+    c.header(
+      'Retry-After',
+      String(Math.max(1, Math.ceil((expiresAt - now) / 1000))),
+    );
+    c.header('X-RateLimit-Reset', String(Math.ceil(expiresAt / 1000)));
+    throw new HttpError(429, 'Too Many Attempts.');
+  }
+
+  const accountKey = await resolveAccountKey();
   const limits = [
-    { key: `web-auth-ip:${ip}`, max: 30 },
-    { key: `web-auth-email:${email}|${ip}`, max: 5 },
+    { key: ipKey, max: 30 },
+    {
+      key: createHash('sha256')
+        .update(`web-auth-account:${accountKey}|${ip}`)
+        .digest('hex'),
+      max: 5,
+    },
   ];
   const result = await db.transaction(async (tx) => {
     const buckets: {
@@ -320,21 +355,22 @@ export async function checkAuthRateLimit(
       expiresAt: number;
     }[] = [];
     for (const limit of limits) {
-      const key = createHash('sha256').update(limit.key).digest('hex');
       // The unique-key write acquires a lock even when this is the first attempt.
       await tx.execute(
         'INSERT INTO hono_rate_limits (key_hash, hits, expires_at) VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE key_hash = VALUES(key_hash)',
-        [key, now + 60_000],
+        [limit.key, now + RATE_LIMIT_WINDOW_MS],
       );
       const [row] = await tx.query<{ hits: number; expires_at: number }>(
         'SELECT hits, expires_at FROM hono_rate_limits WHERE key_hash = ? FOR UPDATE',
-        [key],
+        [limit.key],
       );
       if (!row) throw new Error('Rate limit row disappeared.');
       // An unused locking row must not start a window for a rejected request.
       const reset = Number(row.expires_at) <= now || Number(row.hits) === 0;
       const hits = reset ? 0 : Number(row.hits);
-      const expiresAt = reset ? now + 60_000 : Number(row.expires_at);
+      const expiresAt = reset
+        ? now + RATE_LIMIT_WINDOW_MS
+        : Number(row.expires_at);
       if (hits >= limit.max)
         return {
           blocked: true,
@@ -342,7 +378,7 @@ export async function checkAuthRateLimit(
           remaining: 0,
           expiresAt,
         };
-      buckets.push({ key, hits, max: limit.max, expiresAt });
+      buckets.push({ key: limit.key, hits, max: limit.max, expiresAt });
     }
     // A request rejected by either bucket consumes neither allowance.
     let remaining = Infinity;
@@ -358,7 +394,12 @@ export async function checkAuthRateLimit(
         max = bucket.max;
       }
     }
-    return { blocked: false, max, remaining, expiresAt: now + 60_000 };
+    return {
+      blocked: false,
+      max,
+      remaining,
+      expiresAt: now + RATE_LIMIT_WINDOW_MS,
+    };
   });
   c.header('X-RateLimit-Limit', String(result.max));
   c.header('X-RateLimit-Remaining', String(result.remaining));
