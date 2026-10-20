@@ -447,9 +447,10 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 保存済みusernameへ解決して同じ認証・rate-limit経路を使います。未知emailとpassword不一致も、
 未知usernameと同じform-level 401です。
 
-この期間のlogin成功responseだけは、7 fieldのUser DTOへ`"name": dto.displayName`を加えます。
-これは旧Front向けのroute-local adapterであり、emailやpassword hashは返しません。#105・#121の
-互換削除releaseでlogin responseから`name`を削除します。
+この期間のlogin成功responseと`GET /auth/me`は、7 fieldのUser DTOへ
+`"name": dto.displayName`を加えます。これは旧Front向けのroute-local adapterであり、emailや
+password hashは返しません。#105はlogin、#107はmeのresponseから`name`を削除し、#121の
+互換削除releaseで同時に公開します。
 
 形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
 どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
@@ -676,8 +677,8 @@ trafficを流さず、#109の最終backfillをcutover確認の代わりにしま
 互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
 利用者へ旧email loginを透過的に提供できないため、runbookどおりmaintenanceとforward-fixを優先します。
 
-#101のgate true経路が変更するのは`POST /auth/login`だけです。registerとmeはそれぞれ#103と#102が
-同じgateへ接続するまでlegacy経路を維持し、logoutは#101では変更しません。
+#101 / #102のgate true経路は`POST /auth/login`と`GET /auth/me`を新User DTOへ切り替えます。
+registerは#103が同じgateへ接続するまでlegacy経路を維持し、logoutは変更しません。
 
 個別の#101 / #102 / #103をmergeした時点では、共有Backendの設定を`true`へ変更しません。
 #118で全API maintenance、backfill、全instanceの同一release確認を完了してから一括で有効化します。

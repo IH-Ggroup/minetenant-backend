@@ -222,6 +222,22 @@ function duplicateEmail(): ValidationError {
   });
 }
 
+async function findSessionUser(
+  db: Database,
+  userId: string,
+): Promise<SessionUserRow | undefined> {
+  const [user] = await db.query<SessionUserRow>(
+    `SELECT users.user_id, users.username, users.display_name,
+            users.password_hash, users.role, stores.store_id AS store_id
+       FROM users
+       LEFT JOIN stores ON stores.user_id = users.user_id
+      WHERE users.user_id = ?
+      LIMIT 1`,
+    [userId],
+  );
+  return user;
+}
+
 export function createAuthRoutes(
   db: Database,
   config: AppConfig,
@@ -416,9 +432,19 @@ export function createAuthRoutes(
     return c.json({ data: serializeUser(user) });
   });
 
-  routes.get('/me', requireAuth, (c) =>
-    c.json({ data: serializeUser(c.get('user')!) }),
-  );
+  routes.get('/me', requireAuth, async (c) => {
+    if (!config.usernameAuthEnabled)
+      return c.json({ data: serializeUser(c.get('user')!) });
+
+    const userId = c.get('session')?.userId;
+    if (!userId) throw new HttpError(401, 'Unauthenticated.');
+
+    const user = await findSessionUser(db, userId);
+    if (!user) throw new HttpError(401, 'Unauthenticated.');
+
+    const dto = serializeSessionUser(user);
+    return c.json({ data: { ...dto, name: dto.displayName } });
+  });
   routes.post('/logout', requireAuth, async (c) => {
     await destroySession(c, db, config);
     return c.body(null, 204);
