@@ -22,6 +22,13 @@ interface SessionRow {
   expires_at: number;
 }
 
+class SessionRotationConflictError extends HttpError {
+  constructor() {
+    super(419, 'CSRF token mismatch.');
+    this.name = 'SessionRotationConflictError';
+  }
+}
+
 const SESSION_BOOTSTRAP_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -238,16 +245,45 @@ export async function rotateSession(
   config: AppConfig,
   userId: string | null,
 ): Promise<void> {
+  await rotateSessionWith(c, db, config, userId, async () => undefined);
+}
+
+/** Include related writes in the same transaction as session rotation. */
+export async function rotateSessionWith<T>(
+  c: Context<AppEnv>,
+  db: Database,
+  config: AppConfig,
+  userId: string | null,
+  operation: (tx: SqlExecutor) => Promise<T>,
+): Promise<T> {
   const previous = c.get('session');
   const replacement = newSession(config, userId);
-  await db.transaction(async (tx) => {
-    if (previous)
-      await tx.execute('DELETE FROM hono_sessions WHERE session_id = ?', [
-        previous.id,
-      ]);
-    await insertSession(tx, replacement);
-  });
-  c.set('session', replacement);
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (previous) {
+        const deleted = await tx.execute(
+          'DELETE FROM hono_sessions WHERE session_id = ?',
+          [previous.id],
+        );
+        // Only one request may consume a session for rotation. This protects
+        // registration from double-submit races using the same CSRF/session pair.
+        if (deleted.affectedRows !== 1)
+          throw new SessionRotationConflictError();
+      }
+      const value = await operation(tx);
+      await insertSession(tx, replacement);
+      return value;
+    });
+    c.set('session', replacement);
+    return result;
+  } catch (error) {
+    if (error instanceof SessionRotationConflictError) {
+      // Do not reissue the consumed cookie over the winning response.
+      c.set('session', undefined);
+      c.set('user', undefined);
+    }
+    throw error;
+  }
 }
 
 /** Create anonymous sessions only through the explicit CSRF bootstrap route. */
