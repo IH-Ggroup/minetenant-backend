@@ -44,6 +44,9 @@ export interface SessionUserRow {
   store_id: string | null;
 }
 
+/** Transitional row shared by login and the browser session middleware. */
+export type AuthenticatedUserRow = UserRow & SessionUserRow;
+
 /** Public user contract shared by register, login and me. */
 export interface SessionUser {
   readonly id: string;

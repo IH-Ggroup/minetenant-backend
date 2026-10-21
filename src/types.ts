@@ -1,11 +1,11 @@
 import type { HttpBindings } from '@hono/node-server';
 import type { AuthSession } from './auth.js';
-import type { UserRow } from './domain/types.js';
+import type { AuthenticatedUserRow } from './domain/types.js';
 
 export type AppEnv = {
   Bindings: Partial<HttpBindings>;
   Variables: {
-    user: UserRow | undefined;
+    user: AuthenticatedUserRow | undefined;
     session: AuthSession | undefined;
     clientIp: string;
   };
