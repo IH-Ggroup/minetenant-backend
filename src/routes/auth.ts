@@ -9,6 +9,7 @@ import {
   findAuthenticatedUser,
   requireAuth,
   rotateSession,
+  rotateSessionWith,
 } from '../auth.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
@@ -17,10 +18,18 @@ import {
   normalizeUsername,
   parseLoginCredentials,
   parseLoginPassword,
+  parseRegisterCredentials,
 } from '../domain/auth-credentials.js';
 import { HttpError, ValidationError } from '../domain/errors.js';
 import { serializeSessionUser, serializeUser } from '../domain/serializers.js';
 import type { AuthenticatedUserRow } from '../domain/types.js';
+import {
+  assertRegistrationIdentifierAvailable,
+  createRegistration,
+  duplicateEmail,
+  type LegacyRegistration,
+  type UsernameRegistration,
+} from '../services/registration.js';
 import {
   parseBody,
   parseJsonBody,
@@ -121,7 +130,7 @@ async function emailAccountKey(
     : `email:${email}`;
 }
 
-async function loginAccountKey(db: Database, body: Input): Promise<string> {
+async function authAccountKey(db: Database, body: Input): Promise<string> {
   if (typeof body.username === 'string')
     return `username:${normalizeUsername(body.username)}`;
   if (typeof body.email === 'string')
@@ -135,6 +144,60 @@ function rejectMixedLoginIdentifiers(body: Input): void {
   throw new ValidationError({
     username: [message],
     email: [message],
+  });
+}
+
+const usernameRegisterFields = [
+  'username',
+  'displayName',
+  'passwordConfirmation',
+] as const;
+const legacyRegisterFields = [
+  'name',
+  'email',
+  'password_confirmation',
+] as const;
+const syntheticEmailPattern = /^legacy\+[0-9a-f]{48}@legacy\.invalid$/;
+
+type ParsedRegistration =
+  | {
+      readonly kind: 'username';
+      readonly username: string;
+      readonly displayName: string;
+      readonly password: string;
+    }
+  | {
+      readonly kind: 'legacy';
+      readonly name: string;
+      readonly email: string;
+      readonly password: string;
+    };
+
+function presentFields(
+  body: Input,
+  fields: readonly string[],
+): readonly string[] {
+  return fields.filter((field) => Object.hasOwn(body, field));
+}
+
+function registerRequestKind(body: Input): 'username' | 'legacy' {
+  const usernameFields = presentFields(body, usernameRegisterFields);
+  const legacyFields = presentFields(body, legacyRegisterFields);
+  if (usernameFields.length > 0 && legacyFields.length > 0) {
+    const message = '新しい登録項目と従来の登録項目は同時に指定できません。';
+    throw new ValidationError(
+      Object.fromEntries(
+        [...usernameFields, ...legacyFields].map((field) => [field, [message]]),
+      ),
+    );
+  }
+  return legacyFields.length > 0 ? 'legacy' : 'username';
+}
+
+function rejectReservedLegacyEmail(email: string): void {
+  if (!syntheticEmailPattern.test(email)) return;
+  throw new ValidationError({
+    email: ['このメールアドレスは使用できません。'],
   });
 }
 
@@ -217,12 +280,6 @@ function compatibleEmailLoginCredentials(data: Input): {
   return { email: email!, password: password! };
 }
 
-function duplicateEmail(): ValidationError {
-  return new ValidationError({
-    email: ['このメールアドレスは既に登録されています。'],
-  });
-}
-
 export function createAuthRoutes(
   db: Database,
   config: AppConfig,
@@ -242,13 +299,78 @@ export function createAuthRoutes(
   });
 
   routes.post('/register', async (c) => {
+    if (config.usernameAuthEnabled) {
+      // Keep raw canonical values intact while retaining the old parser's
+      // normalization for the temporary legacy request contract.
+      const body = await parseJsonBody(c.req.raw.clone());
+      await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
+      const kind = registerRequestKind(body);
+
+      let parsed: ParsedRegistration;
+      if (kind === 'username') {
+        const current = parseRegisterCredentials(body);
+        await assertRegistrationIdentifierAvailable(db, {
+          kind,
+          username: current.username,
+        });
+        parsed = {
+          kind,
+          username: current.username,
+          displayName: current.displayName,
+          password: current.password,
+        };
+      } else {
+        const legacyBody = await parseBody(c.req.raw);
+        const legacy = credentials(legacyBody, true);
+        rejectReservedLegacyEmail(legacy.email);
+        await assertRegistrationIdentifierAvailable(db, {
+          kind,
+          email: legacy.email,
+        });
+        parsed = {
+          kind,
+          name: legacy.name,
+          email: legacy.email,
+          password: legacy.password,
+        };
+      }
+
+      const passwordHash = await bcrypt.hash(
+        parsed.password,
+        config.bcryptRounds,
+      );
+      const ids = { userId: randomUUID(), storeId: randomUUID() };
+      const registration: UsernameRegistration | LegacyRegistration =
+        parsed.kind === 'username'
+          ? {
+              kind: parsed.kind,
+              ...ids,
+              username: parsed.username,
+              displayName: parsed.displayName,
+              passwordHash,
+            }
+          : {
+              kind: parsed.kind,
+              ...ids,
+              name: parsed.name,
+              email: parsed.email,
+              passwordHash,
+            };
+      const user = await createRegistration(
+        db,
+        registration,
+        (registeredUserId, operation) =>
+          rotateSessionWith(c, db, config, registeredUserId, operation),
+      );
+      const dto = serializeSessionUser(user);
+      return c.json({ data: { ...dto, name: dto.displayName } }, 201);
+    }
+
     const body = await parseBody(c.req.raw);
     await checkAuthRateLimit(c, db, () =>
       typeof body.email === 'string'
-        ? emailAccountKey(db, body.email, config.usernameAuthEnabled)
-        : config.usernameAuthEnabled
-          ? 'empty'
-          : 'email:',
+        ? emailAccountKey(db, body.email, false)
+        : 'email:',
     );
     const { name, email, password } = credentials(body, true);
     const [existing] = await db.query<{ user_id: string }>(
@@ -316,7 +438,7 @@ export function createAuthRoutes(
   routes.post('/login', async (c) => {
     if (config.usernameAuthEnabled) {
       const body = await parseJsonBody(c.req.raw);
-      await checkAuthRateLimit(c, db, () => loginAccountKey(db, body));
+      await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
       rejectMixedLoginIdentifiers(body);
 
       let identifier: 'username' | 'email';
