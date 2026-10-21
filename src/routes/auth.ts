@@ -6,6 +6,7 @@ import {
   bootstrapSession,
   checkAuthRateLimit,
   destroySession,
+  findAuthenticatedUser,
   requireAuth,
   rotateSession,
 } from '../auth.js';
@@ -19,7 +20,7 @@ import {
 } from '../domain/auth-credentials.js';
 import { HttpError, ValidationError } from '../domain/errors.js';
 import { serializeSessionUser, serializeUser } from '../domain/serializers.js';
-import type { SessionUserRow, UserRow } from '../domain/types.js';
+import type { AuthenticatedUserRow } from '../domain/types.js';
 import {
   parseBody,
   parseJsonBody,
@@ -222,22 +223,6 @@ function duplicateEmail(): ValidationError {
   });
 }
 
-async function findSessionUser(
-  db: Database,
-  userId: string,
-): Promise<SessionUserRow | undefined> {
-  const [user] = await db.query<SessionUserRow>(
-    `SELECT users.user_id, users.username, users.display_name,
-            users.password_hash, users.role, stores.store_id AS store_id
-       FROM users
-       LEFT JOIN stores ON stores.user_id = users.user_id
-      WHERE users.user_id = ?
-      LIMIT 1`,
-    [userId],
-  );
-  return user;
-}
-
 export function createAuthRoutes(
   db: Database,
   config: AppConfig,
@@ -274,8 +259,11 @@ export function createAuthRoutes(
     const passwordHash = await bcrypt.hash(password, config.bcryptRounds);
     const userId = randomUUID();
     const storeId = randomUUID();
-    const user: UserRow = {
+    const user: AuthenticatedUserRow = {
       user_id: userId,
+      username: null,
+      display_name: null,
+      password_hash: null,
       name,
       email,
       password: passwordHash,
@@ -346,15 +334,7 @@ export function createAuthRoutes(
         password = current.password;
       }
 
-      const [user] = await db.query<SessionUserRow>(
-        `SELECT users.user_id, users.username, users.display_name,
-                users.password_hash, users.role, stores.store_id AS store_id
-           FROM users
-           LEFT JOIN stores ON stores.user_id = users.user_id
-          WHERE users.${identifier} = ?
-          LIMIT 1`,
-        [value],
-      );
+      const user = await findAuthenticatedUser(db, identifier, value);
       const resolvedDummyHash = await dummyHash;
       const valid = await passwordMatches(
         password,
@@ -395,10 +375,7 @@ export function createAuthRoutes(
       ),
     );
     const { email, password } = credentials(body, false);
-    const [user] = await db.query<UserRow>(
-      'SELECT users.*, stores.store_id AS store_id FROM users LEFT JOIN stores ON stores.user_id = users.user_id WHERE users.email = ? LIMIT 1',
-      [email],
-    );
+    const user = await findAuthenticatedUser(db, 'email', email);
     const resolvedDummyHash = await dummyHash;
     const storedHash = user?.password;
     const valid = await passwordMatches(
@@ -432,16 +409,10 @@ export function createAuthRoutes(
     return c.json({ data: serializeUser(user) });
   });
 
-  routes.get('/me', requireAuth, async (c) => {
+  routes.get('/me', requireAuth, (c) => {
+    const user = c.get('user')!;
     if (!config.usernameAuthEnabled)
-      return c.json({ data: serializeUser(c.get('user')!) });
-
-    const userId = c.get('session')?.userId;
-    if (!userId) throw new HttpError(401, 'Unauthenticated.');
-
-    const user = await findSessionUser(db, userId);
-    if (!user) throw new HttpError(401, 'Unauthenticated.');
-
+      return c.json({ data: serializeUser(user) });
     const dto = serializeSessionUser(user);
     return c.json({ data: { ...dto, name: dto.displayName } });
   });

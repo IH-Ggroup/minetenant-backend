@@ -150,6 +150,52 @@ describe('session user endpoint cutover gate', () => {
     expect(anonymous.headers.getSetCookie()).toHaveLength(0);
   });
 
+  it('returns 401 for a valid anonymous session without a userId', async () => {
+    const sessionId = client.cookies.get(setup.config.sessionCookie)!;
+    const response = await client.request('/api/v1/auth/me');
+
+    await expectStatus(response, 401);
+    expect(await response.json()).toEqual({ message: 'Unauthenticated.' });
+    expect(client.cookies.get(setup.config.sessionCookie)).toBe(sessionId);
+    expect(
+      await setup.db.query(
+        'SELECT session_id FROM hono_sessions WHERE session_id = ?',
+        [sessionId],
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('returns 401 after the authenticated user has been deleted', async () => {
+    await setup.db.execute(
+      `INSERT INTO users
+        (user_id, username, display_name, password_hash, role)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        'deleted-session-user',
+        'deleted_user',
+        '削除対象利用者',
+        passwordHash,
+        'buyer',
+      ],
+    );
+    await loginWithUsername(client, 'deleted_user');
+    const sessionId = client.cookies.get(setup.config.sessionCookie)!;
+    await setup.db.execute('DELETE FROM users WHERE user_id = ?', [
+      'deleted-session-user',
+    ]);
+
+    expect(
+      await setup.db.query(
+        'SELECT session_id FROM hono_sessions WHERE session_id = ?',
+        [sessionId],
+      ),
+    ).toEqual([]);
+    const response = await client.request('/api/v1/auth/me');
+    await expectStatus(response, 401);
+    expect(await response.json()).toEqual({ message: 'Unauthenticated.' });
+    expect(response.headers.getSetCookie()).toHaveLength(0);
+  });
+
   it('fails closed without exposing user, credential, or session values', async () => {
     await loginWithUsername(client);
     const sessionId = client.cookies.get(setup.config.sessionCookie)!;
