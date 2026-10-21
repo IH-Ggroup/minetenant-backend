@@ -60,8 +60,15 @@ MySQL本体のインストールやOSサービスの起動は自動化しませ�
 接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
-`0003_username_auth`適用後もroute、serializer、seedとデモ認証はemail方式のままです。#118のcutover前に
-現行registerやseedが作る新しい認証3列すべてNULLの行は想定内で、移行用commandが後から補完します。
+username認証は`USERNAME_AUTH_ENABLED`で段階的に切り替えます。local / testでは省略時`false`、
+productionでは`true`または`false`の明示設定が必須です。productionでの欠落・空文字と、
+全環境の`true` / `false`以外の値では起動しません。
+`false`ではemail方式のendpointと旧serializerだけを使います。`true`の共有環境への適用は、
+#101〜#103を含むreleaseを全API maintenance下で切り替える#118まで行いません。
+
+`0003_username_auth`適用後も、legacy registerやgate false用seedが作る新しい認証3列すべてNULLの行は
+想定内です。
+#118のcutoverでは、共有trafficを`true`へ切り替える前に移行用commandで補完・検証します。
 
 [疎通確認](http://localhost:8787/api/hello)が
 `MineTenant API is running.`を返せば起動完了です。停止は`Ctrl+C`です。
@@ -108,8 +115,10 @@ Cookie認証では`XSRF-TOKEN`、`X-XSRF-TOKEN`ヘッダー、
 セッションはHono専用Cookieと`hono_sessions`へ保存します。
 bcryptパスワード（`$2b$`・`$2y$`）を照合できます。
 
-空DBの初期アカウントは`demo@minetenant.jp`、`seller@minetenant.jp`、
-パスワードは双方`password`です。ローカル開発専用です。
+`USERNAME_AUTH_ENABLED=false`で使う空DBの初期アカウントは`demo@minetenant.jp`、
+`seller@minetenant.jp`、パスワードは双方`password`です。ローカル開発専用です。
+gate false用seedの新しい認証3列は移行commandまたは#104のseed更新まで補完されないため、
+seed直後のDBに対してusername認証を有効化しません。
 
 [API仕様](docs/api.md)に全エンドポイントを記載しています。
 
@@ -204,6 +213,7 @@ Cloudflare Workers + D1へのDB変更やデプロイは含みません。
 APP_ENV=production
 APP_DEBUG=false
 APP_URL=https://YOUR-FRONTEND.workers.dev
+USERNAME_AUTH_ENABLED=false
 MINETENANT_PUBLIC_TUNNEL=true
 MINETENANT_ORIGIN_TOKEN=32文字以上のランダムな秘密値
 SESSION_SECURE_COOKIE=true
