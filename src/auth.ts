@@ -245,10 +245,19 @@ export async function rotateSession(
   config: AppConfig,
   userId: string | null,
 ): Promise<void> {
-  await rotateSessionWith(c, db, config, userId, async () => undefined);
+  const previous = c.get('session');
+  const replacement = newSession(config, userId);
+  await db.transaction(async (tx) => {
+    if (previous)
+      await tx.execute('DELETE FROM hono_sessions WHERE session_id = ?', [
+        previous.id,
+      ]);
+    await insertSession(tx, replacement);
+  });
+  c.set('session', replacement);
 }
 
-/** Include related writes in the same transaction as session rotation. */
+/** Include registration writes in an exclusive session-rotation transaction. */
 export async function rotateSessionWith<T>(
   c: Context<AppEnv>,
   db: Database,
@@ -265,8 +274,7 @@ export async function rotateSessionWith<T>(
           'DELETE FROM hono_sessions WHERE session_id = ?',
           [previous.id],
         );
-        // Only one request may consume a session for rotation. This protects
-        // registration from double-submit races using the same CSRF/session pair.
+        // Only one registration may consume the same CSRF/session pair.
         if (deleted.affectedRows !== 1)
           throw new SessionRotationConflictError();
       }

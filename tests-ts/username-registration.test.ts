@@ -259,7 +259,7 @@ describe('username registration cutover gate', () => {
   it('rejects the synthetic email namespace after cutover', async () => {
     const response = await client.json('/api/v1/auth/register', 'POST', {
       name: '予約領域',
-      email: `legacy+${'a'.repeat(48)}@legacy.invalid`,
+      email: syntheticEmailCandidate('reserved-email', 0),
       password,
     });
     await expectStatus(response, 422);
@@ -350,7 +350,7 @@ describe('username registration cutover gate', () => {
     expect(stores).toHaveLength(1);
   });
 
-  it('allows only one registration to rotate the same browser session', async () => {
+  it('allows only one registration to rotate the same browser session without reissuing loser cookies', async () => {
     const originalSession = client.cookies.get(setup.config.sessionCookie)!;
     const responses = await Promise.all([
       register(client, 'double_submit_a', '二重送信A'),
@@ -385,6 +385,28 @@ describe('username registration cutover gate', () => {
     const me = await client.request('/api/v1/auth/me');
     await expectStatus(me, 200);
     expect(await me.json()).toEqual({ data: expected });
+  });
+
+  it('keeps ordinary login rotation non-exclusive for the same browser session', async () => {
+    await expectStatus(await register(client, 'parallel_login_user'), 201);
+    await expectStatus(await client.json('/api/v1/auth/logout', 'POST'), 204);
+    await expectStatus(await client.request('/api/v1/auth/csrf-cookie'), 204);
+
+    const responses = await Promise.all([
+      client.json('/api/v1/auth/login', 'POST', {
+        username: 'parallel_login_user',
+        password,
+      }),
+      client.json('/api/v1/auth/login', 'POST', {
+        username: 'parallel_login_user',
+        password,
+      }),
+    ]);
+    expect(responses.map(({ status }) => status)).toEqual([200, 200]);
+    expect(
+      responses.every((response) => response.headers.has('Set-Cookie')),
+    ).toBe(true);
+    await expectStatus(await client.request('/api/v1/auth/me'), 200);
   });
 
   it('returns the same username error for an existing normalized username', async () => {

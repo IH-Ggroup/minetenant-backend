@@ -13,6 +13,7 @@ import {
 } from '../auth.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
+import { SYNTHETIC_EMAIL_PATTERN } from '../db/auth-backfill.js';
 import {
   isCanonicalUsername,
   normalizeUsername,
@@ -27,10 +28,11 @@ import {
   assertRegistrationIdentifierAvailable,
   createRegistration,
   duplicateEmail,
-  type LegacyRegistration,
-  type UsernameRegistration,
+  type Registration,
+  type RegistrationBase,
 } from '../services/registration.js';
 import {
+  normalizeInput,
   parseBody,
   parseJsonBody,
   Validator,
@@ -157,21 +159,6 @@ const legacyRegisterFields = [
   'email',
   'password_confirmation',
 ] as const;
-const syntheticEmailPattern = /^legacy\+[0-9a-f]{48}@legacy\.invalid$/;
-
-type ParsedRegistration =
-  | {
-      readonly kind: 'username';
-      readonly username: string;
-      readonly displayName: string;
-      readonly password: string;
-    }
-  | {
-      readonly kind: 'legacy';
-      readonly name: string;
-      readonly email: string;
-      readonly password: string;
-    };
 
 function presentFields(
   body: Input,
@@ -195,10 +182,22 @@ function registerRequestKind(body: Input): 'username' | 'legacy' {
 }
 
 function rejectReservedLegacyEmail(email: string): void {
-  if (!syntheticEmailPattern.test(email)) return;
+  if (!SYNTHETIC_EMAIL_PATTERN.test(email)) return;
   throw new ValidationError({
     email: ['このメールアドレスは使用できません。'],
   });
+}
+
+async function createRegistrationBase(
+  password: string,
+  bcryptRounds: number,
+): Promise<RegistrationBase> {
+  const passwordHash = await bcrypt.hash(password, bcryptRounds);
+  return {
+    userId: randomUUID(),
+    storeId: randomUUID(),
+    passwordHash,
+  };
 }
 
 function validateEmail(validator: Validator): string | undefined {
@@ -300,62 +299,45 @@ export function createAuthRoutes(
 
   routes.post('/register', async (c) => {
     if (config.usernameAuthEnabled) {
-      // Keep raw canonical values intact while retaining the old parser's
-      // normalization for the temporary legacy request contract.
-      const body = await parseJsonBody(c.req.raw.clone());
+      // Keep raw canonical values intact while applying legacy normalization
+      // only when the temporary legacy request contract is selected.
+      const body = await parseJsonBody(c.req.raw);
       await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
       const kind = registerRequestKind(body);
 
-      let parsed: ParsedRegistration;
+      let registration: Registration;
       if (kind === 'username') {
         const current = parseRegisterCredentials(body);
         await assertRegistrationIdentifierAvailable(db, {
           kind,
           username: current.username,
         });
-        parsed = {
+        registration = {
           kind,
+          ...(await createRegistrationBase(
+            current.password,
+            config.bcryptRounds,
+          )),
           username: current.username,
           displayName: current.displayName,
-          password: current.password,
         };
       } else {
-        const legacyBody = await parseBody(c.req.raw);
-        const legacy = credentials(legacyBody, true);
+        const legacy = credentials(normalizeInput(body), true);
         rejectReservedLegacyEmail(legacy.email);
         await assertRegistrationIdentifierAvailable(db, {
           kind,
           email: legacy.email,
         });
-        parsed = {
+        registration = {
           kind,
+          ...(await createRegistrationBase(
+            legacy.password,
+            config.bcryptRounds,
+          )),
           name: legacy.name,
           email: legacy.email,
-          password: legacy.password,
         };
       }
-
-      const passwordHash = await bcrypt.hash(
-        parsed.password,
-        config.bcryptRounds,
-      );
-      const ids = { userId: randomUUID(), storeId: randomUUID() };
-      const registration: UsernameRegistration | LegacyRegistration =
-        parsed.kind === 'username'
-          ? {
-              kind: parsed.kind,
-              ...ids,
-              username: parsed.username,
-              displayName: parsed.displayName,
-              passwordHash,
-            }
-          : {
-              kind: parsed.kind,
-              ...ids,
-              name: parsed.name,
-              email: parsed.email,
-              passwordHash,
-            };
       const user = await createRegistration(
         db,
         registration,

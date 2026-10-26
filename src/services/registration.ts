@@ -8,7 +8,7 @@ import type { SessionUserRow } from '../domain/types.js';
 
 const MAX_GENERATED_IDENTIFIER_ATTEMPTS = 100;
 
-interface RegistrationBase {
+export interface RegistrationBase {
   readonly userId: string;
   readonly storeId: string;
   readonly passwordHash: string;
