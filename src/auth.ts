@@ -22,6 +22,13 @@ interface SessionRow {
   expires_at: number;
 }
 
+class SessionRotationConflictError extends HttpError {
+  constructor() {
+    super(419, 'CSRF token mismatch.');
+    this.name = 'SessionRotationConflictError';
+  }
+}
+
 const SESSION_BOOTSTRAP_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
@@ -248,6 +255,43 @@ export async function rotateSession(
     await insertSession(tx, replacement);
   });
   c.set('session', replacement);
+}
+
+/** Include registration writes in an exclusive session-rotation transaction. */
+export async function rotateSessionWith<T>(
+  c: Context<AppEnv>,
+  db: Database,
+  config: AppConfig,
+  userId: string | null,
+  operation: (tx: SqlExecutor) => Promise<T>,
+): Promise<T> {
+  const previous = c.get('session');
+  const replacement = newSession(config, userId);
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (previous) {
+        const deleted = await tx.execute(
+          'DELETE FROM hono_sessions WHERE session_id = ?',
+          [previous.id],
+        );
+        // Only one registration may consume the same CSRF/session pair.
+        if (deleted.affectedRows !== 1)
+          throw new SessionRotationConflictError();
+      }
+      const value = await operation(tx);
+      await insertSession(tx, replacement);
+      return value;
+    });
+    c.set('session', replacement);
+    return result;
+  } catch (error) {
+    if (error instanceof SessionRotationConflictError) {
+      // Do not reissue the consumed cookie over the winning response.
+      c.set('session', undefined);
+      c.set('user', undefined);
+    }
+    throw error;
+  }
 }
 
 /** Create anonymous sessions only through the explicit CSRF bootstrap route. */
