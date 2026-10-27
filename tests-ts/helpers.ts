@@ -32,6 +32,9 @@ export async function createTestApp(overrides: Partial<AppConfig> = {}) {
       DB_PASSWORD:
         process.env.TEST_DB_PASSWORD ?? process.env.DB_PASSWORD ?? 'minetenant',
       BCRYPT_ROUNDS: '4',
+      // Test cases opt in through overrides; a developer's local auth gate must
+      // not change which compatibility contract the shared test fixtures use.
+      USERNAME_AUTH_ENABLED: 'false',
       SESSION_SECURE_COOKIE: 'false',
       SESSION_SAME_SITE: 'lax',
       SESSION_DOMAIN: 'null',

@@ -465,6 +465,13 @@ timing差を縮小します。`errors.username`は付けません。
 }
 ```
 
+local / testの空DBへseedする開発用アカウントは次の2件です。productionへは作成しません。
+
+| userId        | username | password   | displayName | role     | roleLabel | avatarInitial | storeId        |
+| ------------- | -------- | ---------- | ----------- | -------- | --------- | ------------- | -------------- |
+| `user-buyer`  | `demo`   | `password` | 山田 みどり | `buyer`  | 購入者    | 山            | `store-yamada` |
+| `user-seller` | `seller` | `password` | 青鉱舎 店長 | `seller` | 出品者    | 青            | `store-mine`   |
+
 ### 完成時の状態復元とログアウト
 
 ```http
