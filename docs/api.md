@@ -380,7 +380,8 @@ displayNameの保存結果は次で固定します。
 | `null`                 | `demo_user`            |
 | `"　 "`                | `demo_user`            |
 
-利用者と初期店舗を一つのDB transactionで作り、sessionをrotateして`201 Created`を返します。
+利用者・初期店舗・session rotationを一つのDB transactionで確定し、`201 Created`を返します。
+session作成までのいずれかが失敗した場合は、利用者・店舗・session変更をすべてrollbackします。
 登録roleは`buyer`です。初期店舗の`name`は保存済みdisplayName + `"の店舗"`、`description`は
 空文字、`level: 1`、`points: 0`、`syncStatus: "offline"`で固定します。
 
@@ -398,8 +399,10 @@ displayNameの保存結果は次で固定します。
 }
 ```
 
-同じusernameの同時登録はDBのUNIQUE制約を正本として一方だけ成功させ、敗者も事前重複と同じ
-`422`と`errors.username`にします。利用者だけ、または店舗だけを残しません。
+異なるsessionから同じusernameを同時登録した場合は、DBのUNIQUE制約を正本として一方だけ成功させ、
+敗者も事前重複と同じ`422`と`errors.username`にします。利用者だけ、または店舗だけを残しません。
+同じsession / CSRF tokenを使う二重送信ではsession rotationを一方だけが確定し、もう一方は419として
+利用者・店舗・session変更をすべてrollbackします。
 
 ```json
 {
@@ -447,9 +450,10 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 保存済みusernameへ解決して同じ認証・rate-limit経路を使います。未知emailとpassword不一致も、
 未知usernameと同じform-level 401です。
 
-この期間のlogin成功responseだけは、7 fieldのUser DTOへ`"name": dto.displayName`を加えます。
-これは旧Front向けのroute-local adapterであり、emailやpassword hashは返しません。#105・#121の
-互換削除releaseでlogin responseから`name`を削除します。
+この期間のlogin成功responseと`GET /auth/me`は、7 fieldのUser DTOへ
+`"name": dto.displayName`を加えます。これは旧Front向けのroute-local adapterであり、emailや
+password hashは返しません。#105はlogin、#107はmeのresponseから`name`を削除し、#121の
+互換削除releaseで同時に公開します。
 
 形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
 どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
@@ -676,8 +680,9 @@ trafficを流さず、#109の最終backfillをcutover確認の代わりにしま
 互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
 利用者へ旧email loginを透過的に提供できないため、runbookどおりmaintenanceとforward-fixを優先します。
 
-#101のgate true経路が変更するのは`POST /auth/login`だけです。registerとmeはそれぞれ#103と#102が
-同じgateへ接続するまでlegacy経路を維持し、logoutは#101では変更しません。
+#101〜#103のgate true経路は`POST /auth/login`、`GET /auth/me`、`POST /auth/register`を
+新User DTOへ切り替えます。registerは新username requestを正としながら、#106まではlegacy requestも
+受理して新旧列へ互換書き込みします。logoutは変更しません。
 
 個別の#101 / #102 / #103をmergeした時点では、共有Backendの設定を`true`へ変更しません。
 #118で全API maintenance、backfill、全instanceの同一release確認を完了してから一括で有効化します。

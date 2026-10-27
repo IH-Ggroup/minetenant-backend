@@ -118,7 +118,8 @@ interface Analysis {
 
 const USERNAME_PATTERN = /^[a-z0-9_]{3,32}$/u;
 const PASSWORD_HASH_PATTERN = /^\$2[by]\$(0[4-9]|1[0-6])\$[./A-Za-z0-9]{53}$/u;
-const SYNTHETIC_EMAIL_PATTERN = /^legacy\+[0-9a-f]{48}@legacy\.invalid$/u;
+export const SYNTHETIC_EMAIL_PATTERN =
+  /^legacy\+[0-9a-f]{48}@legacy\.invalid$/u;
 const FIXED_USERNAMES = new Map([
   ['user-buyer', 'demo'],
   ['user-seller', 'seller'],

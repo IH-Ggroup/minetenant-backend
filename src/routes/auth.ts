@@ -6,21 +6,33 @@ import {
   bootstrapSession,
   checkAuthRateLimit,
   destroySession,
+  findAuthenticatedUser,
   requireAuth,
   rotateSession,
+  rotateSessionWith,
 } from '../auth.js';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
+import { SYNTHETIC_EMAIL_PATTERN } from '../db/auth-backfill.js';
 import {
   isCanonicalUsername,
   normalizeUsername,
   parseLoginCredentials,
   parseLoginPassword,
+  parseRegisterCredentials,
 } from '../domain/auth-credentials.js';
 import { HttpError, ValidationError } from '../domain/errors.js';
 import { serializeSessionUser, serializeUser } from '../domain/serializers.js';
-import type { SessionUserRow, UserRow } from '../domain/types.js';
+import type { AuthenticatedUserRow } from '../domain/types.js';
 import {
+  assertRegistrationIdentifierAvailable,
+  createRegistration,
+  duplicateEmail,
+  type Registration,
+  type RegistrationBase,
+} from '../services/registration.js';
+import {
+  normalizeInput,
   parseBody,
   parseJsonBody,
   Validator,
@@ -120,7 +132,7 @@ async function emailAccountKey(
     : `email:${email}`;
 }
 
-async function loginAccountKey(db: Database, body: Input): Promise<string> {
+async function authAccountKey(db: Database, body: Input): Promise<string> {
   if (typeof body.username === 'string')
     return `username:${normalizeUsername(body.username)}`;
   if (typeof body.email === 'string')
@@ -135,6 +147,57 @@ function rejectMixedLoginIdentifiers(body: Input): void {
     username: [message],
     email: [message],
   });
+}
+
+const usernameRegisterFields = [
+  'username',
+  'displayName',
+  'passwordConfirmation',
+] as const;
+const legacyRegisterFields = [
+  'name',
+  'email',
+  'password_confirmation',
+] as const;
+
+function presentFields(
+  body: Input,
+  fields: readonly string[],
+): readonly string[] {
+  return fields.filter((field) => Object.hasOwn(body, field));
+}
+
+function registerRequestKind(body: Input): 'username' | 'legacy' {
+  const usernameFields = presentFields(body, usernameRegisterFields);
+  const legacyFields = presentFields(body, legacyRegisterFields);
+  if (usernameFields.length > 0 && legacyFields.length > 0) {
+    const message = '新しい登録項目と従来の登録項目は同時に指定できません。';
+    throw new ValidationError(
+      Object.fromEntries(
+        [...usernameFields, ...legacyFields].map((field) => [field, [message]]),
+      ),
+    );
+  }
+  return legacyFields.length > 0 ? 'legacy' : 'username';
+}
+
+function rejectReservedLegacyEmail(email: string): void {
+  if (!SYNTHETIC_EMAIL_PATTERN.test(email)) return;
+  throw new ValidationError({
+    email: ['このメールアドレスは使用できません。'],
+  });
+}
+
+async function createRegistrationBase(
+  password: string,
+  bcryptRounds: number,
+): Promise<RegistrationBase> {
+  const passwordHash = await bcrypt.hash(password, bcryptRounds);
+  return {
+    userId: randomUUID(),
+    storeId: randomUUID(),
+    passwordHash,
+  };
 }
 
 function validateEmail(validator: Validator): string | undefined {
@@ -216,12 +279,6 @@ function compatibleEmailLoginCredentials(data: Input): {
   return { email: email!, password: password! };
 }
 
-function duplicateEmail(): ValidationError {
-  return new ValidationError({
-    email: ['このメールアドレスは既に登録されています。'],
-  });
-}
-
 export function createAuthRoutes(
   db: Database,
   config: AppConfig,
@@ -241,13 +298,61 @@ export function createAuthRoutes(
   });
 
   routes.post('/register', async (c) => {
+    if (config.usernameAuthEnabled) {
+      // Keep raw canonical values intact while applying legacy normalization
+      // only when the temporary legacy request contract is selected.
+      const body = await parseJsonBody(c.req.raw);
+      await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
+      const kind = registerRequestKind(body);
+
+      let registration: Registration;
+      if (kind === 'username') {
+        const current = parseRegisterCredentials(body);
+        await assertRegistrationIdentifierAvailable(db, {
+          kind,
+          username: current.username,
+        });
+        registration = {
+          kind,
+          ...(await createRegistrationBase(
+            current.password,
+            config.bcryptRounds,
+          )),
+          username: current.username,
+          displayName: current.displayName,
+        };
+      } else {
+        const legacy = credentials(normalizeInput(body), true);
+        rejectReservedLegacyEmail(legacy.email);
+        await assertRegistrationIdentifierAvailable(db, {
+          kind,
+          email: legacy.email,
+        });
+        registration = {
+          kind,
+          ...(await createRegistrationBase(
+            legacy.password,
+            config.bcryptRounds,
+          )),
+          name: legacy.name,
+          email: legacy.email,
+        };
+      }
+      const user = await createRegistration(
+        db,
+        registration,
+        (registeredUserId, operation) =>
+          rotateSessionWith(c, db, config, registeredUserId, operation),
+      );
+      const dto = serializeSessionUser(user);
+      return c.json({ data: { ...dto, name: dto.displayName } }, 201);
+    }
+
     const body = await parseBody(c.req.raw);
     await checkAuthRateLimit(c, db, () =>
       typeof body.email === 'string'
-        ? emailAccountKey(db, body.email, config.usernameAuthEnabled)
-        : config.usernameAuthEnabled
-          ? 'empty'
-          : 'email:',
+        ? emailAccountKey(db, body.email, false)
+        : 'email:',
     );
     const { name, email, password } = credentials(body, true);
     const [existing] = await db.query<{ user_id: string }>(
@@ -258,8 +363,11 @@ export function createAuthRoutes(
     const passwordHash = await bcrypt.hash(password, config.bcryptRounds);
     const userId = randomUUID();
     const storeId = randomUUID();
-    const user: UserRow = {
+    const user: AuthenticatedUserRow = {
       user_id: userId,
+      username: null,
+      display_name: null,
+      password_hash: null,
       name,
       email,
       password: passwordHash,
@@ -312,7 +420,7 @@ export function createAuthRoutes(
   routes.post('/login', async (c) => {
     if (config.usernameAuthEnabled) {
       const body = await parseJsonBody(c.req.raw);
-      await checkAuthRateLimit(c, db, () => loginAccountKey(db, body));
+      await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
       rejectMixedLoginIdentifiers(body);
 
       let identifier: 'username' | 'email';
@@ -330,15 +438,7 @@ export function createAuthRoutes(
         password = current.password;
       }
 
-      const [user] = await db.query<SessionUserRow>(
-        `SELECT users.user_id, users.username, users.display_name,
-                users.password_hash, users.role, stores.store_id AS store_id
-           FROM users
-           LEFT JOIN stores ON stores.user_id = users.user_id
-          WHERE users.${identifier} = ?
-          LIMIT 1`,
-        [value],
-      );
+      const user = await findAuthenticatedUser(db, identifier, value);
       const resolvedDummyHash = await dummyHash;
       const valid = await passwordMatches(
         password,
@@ -379,10 +479,7 @@ export function createAuthRoutes(
       ),
     );
     const { email, password } = credentials(body, false);
-    const [user] = await db.query<UserRow>(
-      'SELECT users.*, stores.store_id AS store_id FROM users LEFT JOIN stores ON stores.user_id = users.user_id WHERE users.email = ? LIMIT 1',
-      [email],
-    );
+    const user = await findAuthenticatedUser(db, 'email', email);
     const resolvedDummyHash = await dummyHash;
     const storedHash = user?.password;
     const valid = await passwordMatches(
@@ -416,9 +513,13 @@ export function createAuthRoutes(
     return c.json({ data: serializeUser(user) });
   });
 
-  routes.get('/me', requireAuth, (c) =>
-    c.json({ data: serializeUser(c.get('user')!) }),
-  );
+  routes.get('/me', requireAuth, (c) => {
+    const user = c.get('user')!;
+    if (!config.usernameAuthEnabled)
+      return c.json({ data: serializeUser(user) });
+    const dto = serializeSessionUser(user);
+    return c.json({ data: { ...dto, name: dto.displayName } });
+  });
   routes.post('/logout', requireAuth, async (c) => {
     await destroySession(c, db, config);
     return c.body(null, 204);

@@ -32,6 +32,11 @@ function normalize(value: unknown, field = ''): unknown {
   return value;
 }
 
+/** Apply the legacy body normalization to an already parsed input object. */
+export function normalizeInput(input: Input): Input {
+  return normalize(input) as Input;
+}
+
 function parseFormEntries(entries: Iterable<[string, unknown]>): Input {
   const input: Input = Object.create(null) as Input;
   for (const [rawKey, value] of entries) {
@@ -45,7 +50,7 @@ function parseFormEntries(entries: Iterable<[string, unknown]>): Input {
     ).replace(/[ .]/g, '_');
     if (name !== '') input[name] = array ? [value] : value;
   }
-  return normalize(input) as Input;
+  return normalizeInput(input);
 }
 
 export function parseQuery(url: string): Input {
@@ -78,7 +83,7 @@ export async function parseBody(request: Request): Promise<Input> {
   }
   if (body === null || typeof body !== 'object' || Array.isArray(body))
     return {};
-  return normalize(body) as Input;
+  return normalizeInput(body as Input);
 }
 
 export async function parseJsonBody(request: Request): Promise<Input> {
