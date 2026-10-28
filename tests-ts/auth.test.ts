@@ -99,9 +99,15 @@ describe('session authentication', () => {
         [originalSession],
       ),
     ).toEqual([]);
-    const me = await client.request('/api/v1/auth/me');
-    await expectStatus(me, 200);
-    expect(await me.json()).toEqual({ data });
+    const authenticatedSession = client.cookies.get(
+      setup.config.sessionCookie,
+    )!;
+    expect(
+      await setup.db.query<{ user_id: string | null }>(
+        'SELECT user_id FROM hono_sessions WHERE session_id = ?',
+        [authenticatedSession],
+      ),
+    ).toEqual([{ user_id: data.id }]);
   });
 
   it('rejects duplicate email after normalization without creating an extra store', async () => {

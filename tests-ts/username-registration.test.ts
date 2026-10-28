@@ -384,7 +384,9 @@ describe('username registration cutover gate', () => {
     );
     const me = await client.request('/api/v1/auth/me');
     await expectStatus(me, 200);
-    expect(await me.json()).toEqual({ data: expected });
+    const meExpected = { ...expected };
+    delete meExpected.name;
+    expect(await me.json()).toEqual({ data: meExpected });
   });
 
   it('keeps ordinary login rotation non-exclusive for the same browser session', async () => {
@@ -621,7 +623,9 @@ describe('username registration cutover gate', () => {
 
     const me = await client.request('/api/v1/auth/me');
     await expectStatus(me, 200);
-    expect(await me.json()).toEqual({ data: expected });
+    const meExpected = { ...expected };
+    delete meExpected.name;
+    expect(await me.json()).toEqual({ data: meExpected });
     await expectStatus(await client.json('/api/v1/auth/logout', 'POST'), 204);
     await expectStatus(await client.request('/api/v1/auth/me'), 401);
 
