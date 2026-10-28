@@ -450,10 +450,9 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 保存済みusernameへ解決して同じ認証・rate-limit経路を使います。未知emailとpassword不一致も、
 未知usernameと同じform-level 401です。
 
-この期間のlogin成功responseと`GET /auth/me`は、7 fieldのUser DTOへ
-`"name": dto.displayName`を加えます。これは旧Front向けのroute-local adapterであり、emailや
-password hashは返しません。#105はlogin、#107はmeのresponseから`name`を削除し、#121の
-互換削除releaseで同時に公開します。
+login成功responseは#105まで7 fieldのUser DTOへ`"name": dto.displayName`を加えます。
+`GET /auth/me`は設定値にかかわらず7 fieldだけを返し、旧`name`を返しません。emailやpassword hashは
+どちらのresponseにも含めません。この変更は#105・#108・#106とともに#121で本番公開します。
 
 形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
 どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
@@ -633,7 +632,7 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
-ログイン成功時と`GET /auth/me`は、次の形でユーザーを返します。
+gateがfalseのログイン成功時は、次のlegacy responseを返します。
 
 ```json
 {
@@ -648,7 +647,7 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
-`GET /auth/me`が401なら未ログインです。パスワードが違うログインは
+`GET /auth/me`はgateにかかわらず完成時の7 fieldを返し、401なら未ログインです。パスワードが違うログインは
 422と`errors.email`を返します。`POST /auth/logout`成功時は204で本文がありません。
 ログイン・登録には、IPごとに毎分30回、メールアドレスとIPの組み合わせごとに
 毎分5回の制限があります。
@@ -681,8 +680,8 @@ trafficを流さず、#109の最終backfillをcutover確認の代わりにしま
 
 `USERNAME_AUTH_ENABLED`は#101〜#103が共有するcutover gateです。local / testでは欠落時
 `false`、`APP_ENV=production`では明示設定を必須とし、欠落・空文字・`true` / `false`以外は設定errorで
-起動しません。`false`ではlegacy email endpointと旧serializerだけを実行し、新認証codeへtrafficを
-流しません。`true`では実装済みendpointの新経路を使い、loginは`{ username, password }`を正として
+起動しません。#107以降のmeはgateを参照せず最終User responseだけを返します。loginとregisterは
+`false`でlegacy経路、`true`で新経路を使い、loginは`{ username, password }`を正として
 期限付きの旧`{ email, password }`も受理します。#103はcutover後の新旧register requestを新旧列へ
 互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
 利用者へ旧email loginを透過的に提供できないため、runbookどおりmaintenanceとforward-fixを優先します。
@@ -711,11 +710,10 @@ emailで登録できるのにemailではloginできない中間状態を作り�
 既知の旧列accessとして残り、#106でruntime旧列reader / writerを0件にします。
 
 #100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設し、現行`GET /users`が使う
-legacy `serializeUser`を変更しません。この期間のregister / login / me routeは前者の結果へ
-`"name": dto.displayName`を足す薄いlegacy adapterをそれぞれ持ち、deprecated fieldを**必ず**
-併記します。#105、#106、#107は対象endpointのadapterだけを削除し、他endpointの
-互換responseを変えません。#108は利用者列挙を避けるため`GET /users`と参照・test・docsを削除します。emailと
-秘密情報は互換期間中もresponseへ返しません。
+legacy `serializeUser`を変更しません。#107でmeの旧branchと`name` adapterは削除済みです。loginと
+registerのadapterは#105・#106がそれぞれ削除し、他endpointの互換responseを変えません。#108は
+利用者列挙を避けるため`GET /users`と参照・test・docsを削除します。emailと秘密情報は互換期間中も
+responseへ返しません。
 
 password rehashの正本切替、binary CAS、旧新両列の同一transaction更新も
 [`auth-cutover.md`](./auth-cutover.md)を正本とします。loginは#105まで、registerは#106まで片方だけを
