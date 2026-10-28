@@ -144,16 +144,6 @@ export function parseLoginCredentials(
   return { username, password };
 }
 
-/** Validate the shared login password rules for a transitional identifier. */
-export function parseLoginPassword(
-  input: Readonly<Record<string, unknown>>,
-): string {
-  const errors: ValidationErrors = {};
-  const password = parsePassword(input, errors);
-  if (Object.keys(errors).length > 0) throw new ValidationError(errors);
-  return password;
-}
-
 export function parseRegisterCredentials(
   input: Readonly<Record<string, unknown>>,
 ): RegisterCredentials {

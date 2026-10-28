@@ -295,7 +295,11 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     ] as const) {
       const response = await client.request(path, {
         method,
-        headers: { Origin: 'http://localhost:5173' },
+        headers: {
+          Origin: 'http://localhost:5173',
+          ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(method === 'POST' ? { body: '{}' } : {}),
       });
       await expectStatus(response, status);
       expect(response.headers.get('Access-Control-Allow-Origin')).toBe(

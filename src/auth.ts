@@ -4,7 +4,7 @@ import { getCookie, setCookie } from 'hono/cookie';
 import type { AppConfig } from './config.js';
 import type { Database, SqlExecutor } from './db.js';
 import { HttpError } from './domain/errors.js';
-import type { AuthenticatedUserRow } from './domain/types.js';
+import type { AuthenticatedUserRow, SessionUserRow } from './domain/types.js';
 import { parseBody } from './domain/validation.js';
 import type { AppEnv } from './types.js';
 
@@ -57,6 +57,23 @@ export async function findAuthenticatedUser(
       WHERE ${column} = ?
       LIMIT 1`,
     [value],
+  );
+  return user;
+}
+
+/** Load only the final authentication columns used by username login. */
+export async function findUsernameLoginUser(
+  db: Database,
+  username: string,
+): Promise<SessionUserRow | undefined> {
+  const [user] = await db.query<SessionUserRow>(
+    `SELECT users.user_id, users.username, users.display_name,
+            users.password_hash, users.role, stores.store_id AS store_id
+       FROM users
+       LEFT JOIN stores ON stores.user_id = users.user_id
+      WHERE users.username = ?
+      LIMIT 1`,
+    [username],
   );
   return user;
 }

@@ -193,20 +193,17 @@ describe('session authentication', () => {
     },
   );
 
-  it('accepts bcrypt $2y$ passwords and normalizes email on login', async () => {
+  it('accepts bcrypt $2y$ password hashes on username login', async () => {
     const hash = (await bcrypt.hash('bcrypt-2y-password', 4)).replace(
       /^\$2b\$/,
       '$2y$',
     );
-    await setup.db.execute('UPDATE users SET password = ? WHERE email = ?', [
-      hash,
-      'demo@minetenant.jp',
-    ]);
-    const originalSession = client.cookies.get(setup.config.sessionCookie);
-    const response = await client.login(
-      ' DEMO@MINETENANT.JP ',
-      'bcrypt-2y-password',
+    await setup.db.execute(
+      'UPDATE users SET password_hash = ? WHERE username = ?',
+      [hash, 'demo'],
     );
+    const originalSession = client.cookies.get(setup.config.sessionCookie);
+    const response = await client.login(' DEMO ', 'bcrypt-2y-password');
     await expectStatus(response, 200);
     const { data } = await response.json();
     expect(data).toMatchObject({
@@ -219,11 +216,11 @@ describe('session authentication', () => {
     );
   });
 
-  it('returns identical credential errors for wrong passwords and unknown email', async () => {
-    const wrong = await client.login('demo@minetenant.jp', 'wrong-password');
-    const unknown = await client.login('unknown@example.com', 'wrong-password');
-    await expectStatus(wrong, 422);
-    await expectStatus(unknown, 422);
+  it('returns identical credential errors for wrong passwords and unknown usernames', async () => {
+    const wrong = await client.login('demo', 'wrong-password');
+    const unknown = await client.login('unknown_user', 'wrong-password');
+    await expectStatus(wrong, 401);
+    await expectStatus(unknown, 401);
     expect(await wrong.json()).toEqual(await unknown.json());
     await expectStatus(await client.request('/api/v1/auth/me'), 401);
   });
@@ -232,27 +229,27 @@ describe('session authentication', () => {
     const missing = await client.json('/api/v1/auth/login', 'POST', {});
     await expectStatus(missing, 422);
     expect(Object.keys((await missing.json()).errors).sort()).toEqual([
-      'email',
       'password',
+      'username',
     ]);
     const invalid = await client.json('/api/v1/auth/login', 'POST', {
-      email: ['invalid'],
+      username: ['invalid'],
       password: 'password',
     });
     await expectStatus(invalid, 422);
-    expect((await invalid.json()).errors.email).toBeDefined();
+    expect((await invalid.json()).errors.username).toBeDefined();
   });
 
   it('rejects passwords with bcrypt-truncated suffixes or NUL on login', async () => {
     const password = 'a'.repeat(72);
-    await setup.db.execute('UPDATE users SET password = ? WHERE email = ?', [
-      await bcrypt.hash(password, 4),
-      'demo@minetenant.jp',
-    ]);
-    await expectStatus(await client.login('demo@minetenant.jp', password), 200);
+    await setup.db.execute(
+      'UPDATE users SET password_hash = ? WHERE username = ?',
+      [await bcrypt.hash(password, 4), 'demo'],
+    );
+    await expectStatus(await client.login('demo', password), 200);
     await expectStatus(await client.json('/api/v1/auth/logout', 'POST'), 204);
     for (const invalid of [password + 'suffix', 'password\0hidden']) {
-      const response = await client.login('demo@minetenant.jp', invalid);
+      const response = await client.login('demo', invalid);
       await expectStatus(response, 422);
       expect((await response.json()).errors.password).toBeDefined();
     }
@@ -260,7 +257,7 @@ describe('session authentication', () => {
   });
 
   it('requires a session-bound CSRF token, and accepts both supported header names', async () => {
-    const payload = { email: 'demo@minetenant.jp', password: 'password' };
+    const payload = { username: 'demo', password: 'password' };
     await expectStatus(
       await setup.app.request('/api/v1/auth/login', {
         method: 'POST',
@@ -357,24 +354,21 @@ describe('session authentication', () => {
     ).toEqual([]);
   });
 
-  it('limits five attempts per email/IP across login, registration and app instances', async () => {
+  it('limits five attempts per username and IP across app instances', async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
-      const path =
-        attempt % 2 === 0 ? '/api/v1/auth/login' : '/api/v1/auth/register';
       await expectStatus(
-        await client.json(path, 'POST', {
-          name: '',
-          email: 'demo@minetenant.jp',
+        await client.json('/api/v1/auth/login', 'POST', {
+          username: 'demo',
           password: 'wrong-password',
         }),
-        422,
+        401,
       );
     }
     const recreated = createClient(
       createApp({ db: setup.db, config: setup.config }),
     );
     await recreated.request('/api/v1/auth/csrf-cookie');
-    const limited = await recreated.login(' DEMO@MINETENANT.JP ', 'password');
+    const limited = await recreated.login(' DEMO ', 'password');
     await expectStatus(limited, 429);
     expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThan(0);
     await setup.db.execute('UPDATE hono_rate_limits SET expires_at = ?', [
@@ -383,21 +377,21 @@ describe('session authentication', () => {
     await expectStatus(await recreated.login(), 200);
   });
 
-  it('does not consume the shared IP limit for attempts already blocked by the email limit', async () => {
+  it('does not consume the shared IP limit for attempts already blocked by the username limit', async () => {
     for (let attempt = 0; attempt < 5; attempt++) {
       await expectStatus(
         await client.json('/api/v1/auth/login', 'POST', {
-          email: 'limited@example.com',
-          password: '',
+          username: 'limited_user',
+          password: 'wrong-password',
         }),
-        422,
+        401,
       );
     }
     for (let attempt = 0; attempt < 30; attempt++) {
       await expectStatus(
         await client.json('/api/v1/auth/login', 'POST', {
-          email: 'limited@example.com',
-          password: '',
+          username: 'limited_user',
+          password: 'wrong-password',
         }),
         429,
       );
@@ -405,33 +399,33 @@ describe('session authentication', () => {
     for (let attempt = 0; attempt < 25; attempt++) {
       await expectStatus(
         await client.json('/api/v1/auth/login', 'POST', {
-          email: `available${attempt}@example.com`,
-          password: '',
+          username: `available_${attempt}`,
+          password: 'wrong-password',
         }),
-        422,
+        401,
       );
     }
     const limited = await client.json('/api/v1/auth/login', 'POST', {
-      email: 'final@example.com',
-      password: '',
+      username: 'final_user',
+      password: 'wrong-password',
     });
     await expectStatus(limited, 429);
     expect(limited.headers.get('X-RateLimit-Limit')).toBe('30');
   });
 
-  it('also caps attempts from one IP across different email addresses', async () => {
+  it('also caps attempts from one IP across different usernames', async () => {
     for (let attempt = 0; attempt < 30; attempt++) {
       await expectStatus(
         await client.json('/api/v1/auth/login', 'POST', {
-          email: `attempt${attempt}@example.com`,
-          password: '',
+          username: `attempt_${attempt}`,
+          password: 'wrong-password',
         }),
-        422,
+        401,
       );
     }
     const limited = await client.json('/api/v1/auth/login', 'POST', {
-      email: 'new-address@example.com',
-      password: '',
+      username: 'new_user',
+      password: 'wrong-password',
     });
     await expectStatus(limited, 429);
     expect(limited.headers.get('X-RateLimit-Limit')).toBe('30');

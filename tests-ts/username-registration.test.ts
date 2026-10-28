@@ -631,6 +631,8 @@ describe('username registration cutover gate', () => {
       password,
     });
     await expectStatus(login, 200);
-    expect(await login.json()).toEqual({ data: expected });
+    const loginExpected = { ...expected };
+    delete loginExpected.name;
+    expect(await login.json()).toEqual({ data: loginExpected });
   });
 });
