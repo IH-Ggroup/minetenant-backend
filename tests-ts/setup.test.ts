@@ -7,6 +7,8 @@ import bcrypt from 'bcryptjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { migrate } from '../scripts/migrate.js';
 import { seedDemo } from '../scripts/seed.js';
+import { createApp } from '../src/app.js';
+import { runAuthBackfill } from '../src/db/auth-backfill.js';
 import { PRODUCT_STATUS_TRIGGER_CONTRACTS } from '../src/db/product-status-trigger-contract.js';
 import {
   assertDatabaseReady,
@@ -14,7 +16,9 @@ import {
 } from '../src/readiness.js';
 import {
   assertTestDatabaseIsolation,
+  createClient,
   createTestApp,
+  expectStatus,
   type TestApp,
 } from './helpers.js';
 
@@ -119,17 +123,71 @@ describe('safe migration and initial data setup', () => {
     expect(await snapshot()).toEqual(before);
   });
 
-  it('seeds the empty schema with the existing demo records and usable bcrypt passwords', async () => {
+  it('seeds the empty schema with complete username credentials and usable bcrypt passwords', async () => {
     await clearDatabase();
     expect(await seedDemo(test.db, 4)).toBe(true);
     expect(await rowCounts()).toEqual([2, 2, 6, 1]);
-    const users = await test.db.query<{ password: string }>(
-      'SELECT password FROM users',
+    const users = await test.db.query<{
+      userId: string;
+      name: string;
+      email: string;
+      role: 'buyer' | 'seller';
+      roleLabel: string;
+      avatarInitial: string;
+      password: string;
+      username: string;
+      displayName: string;
+      passwordHash: string;
+      storeId: string;
+    }>(
+      `SELECT u.user_id AS userId, u.name, u.email, u.role,
+              u.role_label AS roleLabel, u.avatar_initial AS avatarInitial,
+              u.password, u.username, u.display_name AS displayName,
+              u.password_hash AS passwordHash, s.store_id AS storeId
+         FROM users u
+         LEFT JOIN stores s ON s.user_id = u.user_id
+        ORDER BY BINARY u.user_id`,
     );
+    expect(
+      users.map(
+        ({ password: _password, passwordHash: _passwordHash, ...user }) => user,
+      ),
+    ).toEqual([
+      {
+        userId: 'user-buyer',
+        name: '山田 みどり',
+        email: 'demo@minetenant.jp',
+        role: 'buyer',
+        roleLabel: '購入者デモ',
+        avatarInitial: '山',
+        username: 'demo',
+        displayName: '山田 みどり',
+        storeId: 'store-yamada',
+      },
+      {
+        userId: 'user-seller',
+        name: '青鉱舎 店長',
+        email: 'seller@minetenant.jp',
+        role: 'seller',
+        roleLabel: '出品者デモ',
+        avatarInitial: 'M',
+        username: 'seller',
+        displayName: '青鉱舎 店長',
+        storeId: 'store-mine',
+      },
+    ]);
     for (const user of users) {
       expect(user.password).not.toBe('password');
+      expect(user.passwordHash).toBe(user.password);
       expect(await bcrypt.compare('password', user.password)).toBe(true);
+      expect(await bcrypt.compare('password', user.passwordHash)).toBe(true);
     }
+    await expect(runAuthBackfill(test.db, 'check')).resolves.toEqual({
+      mode: 'check',
+      totalRows: 2,
+      plannedUpdateRows: 0,
+      updatedRows: 0,
+    });
     const [history] = await test.db.query<{
       request_id: string;
       status: string;
@@ -196,6 +254,66 @@ describe('safe migration and initial data setup', () => {
         deleted_at: null,
       },
     ]);
+  });
+
+  it('logs in both seeded users by username and restores the same session user', async () => {
+    const app = createApp({
+      db: test.db,
+      config: { ...test.config, usernameAuthEnabled: true },
+    });
+    const accounts = [
+      {
+        username: 'demo',
+        data: {
+          id: 'user-buyer',
+          username: 'demo',
+          displayName: '山田 みどり',
+          role: 'buyer',
+          roleLabel: '購入者',
+          avatarInitial: '山',
+          storeId: 'store-yamada',
+          name: '山田 みどり',
+        },
+      },
+      {
+        username: 'seller',
+        data: {
+          id: 'user-seller',
+          username: 'seller',
+          displayName: '青鉱舎 店長',
+          role: 'seller',
+          roleLabel: '出品者',
+          avatarInitial: '青',
+          storeId: 'store-mine',
+          name: '青鉱舎 店長',
+        },
+      },
+    ] as const;
+
+    for (const account of accounts) {
+      const client = createClient(app);
+      await expectStatus(await client.request('/api/v1/auth/csrf-cookie'), 204);
+      const login = await client.json('/api/v1/auth/login', 'POST', {
+        username: account.username,
+        password: 'password',
+      });
+      await expectStatus(login, 200);
+      expect(await login.json()).toEqual({ data: account.data });
+
+      const me = await client.request('/api/v1/auth/me');
+      await expectStatus(me, 200);
+      expect(await me.json()).toEqual({ data: account.data });
+    }
+  });
+
+  it('creates the demo dataset only once when two empty-database seeds race', async () => {
+    await clearDatabase();
+    const results = await Promise.all([
+      seedDemo(test.db, 4),
+      seedDemo(test.db, 4),
+    ]);
+    expect(results.sort()).toEqual([false, true]);
+    expect(await rowCounts()).toEqual([2, 2, 6, 1]);
   });
 
   it('keeps the database constraints that prevent lost history, invalid stock and duplicate purchases', async () => {

@@ -110,6 +110,29 @@ const products = [
   ],
 ];
 
+const demoUsers = [
+  {
+    userId: 'user-buyer',
+    name: '山田 みどり',
+    email: 'demo@minetenant.jp',
+    role: 'buyer',
+    roleLabel: '購入者デモ',
+    avatarInitial: '山',
+    username: 'demo',
+    displayName: '山田 みどり',
+  },
+  {
+    userId: 'user-seller',
+    name: '青鉱舎 店長',
+    email: 'seller@minetenant.jp',
+    role: 'seller',
+    roleLabel: '出品者デモ',
+    avatarInitial: 'M',
+    username: 'seller',
+    displayName: '青鉱舎 店長',
+  },
+] as const;
+
 /** Only populate an empty database; never reset stock, accounts, or passwords. */
 export async function seedDemo(
   db: Database,
@@ -117,6 +140,16 @@ export async function seedDemo(
 ): Promise<boolean> {
   const password = await hash('password', bcryptRounds);
   return db.transaction(async (tx) => {
+    // Empty business tables have no row that reliably serializes concurrent
+    // seed attempts. Lock one applied migration row first; the second attempt
+    // then observes the first transaction's committed demo data and skips it.
+    const migrationGuard = await tx.query<{ version: string }>(
+      `SELECT version FROM schema_migrations
+        ORDER BY BINARY version LIMIT 1 FOR UPDATE`,
+    );
+    if (migrationGuard.length === 0) {
+      throw new Error('Demo seeding requires an applied migration.');
+    }
     for (const table of [
       'users',
       'stores',
@@ -129,28 +162,25 @@ export async function seedDemo(
       if (rows.length) return false;
     }
     const seededAt = '2026-07-13 00:00:00';
-    for (const user of [
-      [
-        'user-buyer',
-        '山田 みどり',
-        'demo@minetenant.jp',
-        'buyer',
-        '購入者デモ',
-        '山',
-      ],
-      [
-        'user-seller',
-        '青鉱舎 店長',
-        'seller@minetenant.jp',
-        'seller',
-        '出品者デモ',
-        'M',
-      ],
-    ]) {
+    for (const user of demoUsers) {
       await tx.execute(
-        `INSERT INTO users (user_id,name,email,role,role_label,avatar_initial,password,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?)`,
-        [...user, password, seededAt, seededAt],
+        `INSERT INTO users
+        (user_id,name,email,role,role_label,avatar_initial,password,username,display_name,password_hash,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          user.userId,
+          user.name,
+          user.email,
+          user.role,
+          user.roleLabel,
+          user.avatarInitial,
+          password,
+          user.username,
+          user.displayName,
+          password,
+          seededAt,
+          seededAt,
+        ],
       );
     }
     for (const store of [

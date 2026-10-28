@@ -60,14 +60,15 @@ MySQL本体のインストールやOSサービスの起動は自動化しませ�
 接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
-username認証は`USERNAME_AUTH_ENABLED`で段階的に切り替えます。local / testでは省略時`false`、
+username認証は`USERNAME_AUTH_ENABLED`で段階的に切り替えます。local / testでは省略時`false`ですが、
+新規local環境は`.env.example`から`true`を設定します。既存の`.env`は自動で上書きしないため、
+`USERNAME_AUTH_ENABLED=true`を設定してAPIを再起動してください。
 productionでは`true`または`false`の明示設定が必須です。productionでの欠落・空文字と、
 全環境の`true` / `false`以外の値では起動しません。
 `false`ではemail方式のendpointと旧serializerだけを使います。`true`の共有環境への適用は、
 #101〜#103を含むreleaseを全API maintenance下で切り替える#118まで行いません。
 
-`0003_username_auth`適用後も、legacy registerやgate false用seedが作る新しい認証3列すべてNULLの行は
-想定内です。
+`0003_username_auth`適用後も、legacy registerが作る新しい認証3列すべてNULLの行は想定内です。
 #118のcutoverでは、共有trafficを`true`へ切り替える前に移行用commandで補完・検証します。
 
 [疎通確認](http://localhost:8787/api/hello)が
@@ -115,10 +116,13 @@ Cookie認証では`XSRF-TOKEN`、`X-XSRF-TOKEN`ヘッダー、
 セッションはHono専用Cookieと`hono_sessions`へ保存します。
 bcryptパスワード（`$2b$`・`$2y$`）を照合できます。
 
-`USERNAME_AUTH_ENABLED=false`で使う空DBの初期アカウントは`demo@minetenant.jp`、
-`seller@minetenant.jp`、パスワードは双方`password`です。ローカル開発専用です。
-gate false用seedの新しい認証3列は移行commandまたは#104のseed更新まで補完されないため、
-seed直後のDBに対してusername認証を有効化しません。
+空DBへ作るローカル開発専用アカウントは、購入者がusername `demo`、出品者がusername `seller`、
+パスワードは双方`password`です。seedは既存データがあるDBを削除・上書きせず、productionでは
+実行できません。既存cloneでは`.env`へ`USERNAME_AUTH_ENABLED=true`を設定し、APIを再起動してから
+usernameでログインしてください。
+
+切り替え設定を`false`にした互換経路では、従来どおり`demo@minetenant.jp`と
+`seller@minetenant.jp`をemailとして使用できます。
 
 [API仕様](docs/api.md)に全エンドポイントを記載しています。
 
