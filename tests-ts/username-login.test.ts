@@ -10,7 +10,6 @@ import {
   vi,
 } from 'vitest';
 import { createApp } from '../src/app.js';
-import { syntheticEmailCandidate } from '../src/db/auth-backfill.js';
 import {
   createClient,
   createTestApp,
@@ -23,7 +22,7 @@ const invalidCredentials = {
   message: 'ユーザー名またはパスワードが正しくありません。',
 };
 
-describe('username login cutover gate', () => {
+describe('username-only login', () => {
   let setup: TestApp;
   let client: TestClient;
 
@@ -44,29 +43,24 @@ describe('username login cutover gate', () => {
 
   async function prepareBuyer(
     options: {
-      email?: string;
       username?: string;
       displayName?: string;
       passwordHash?: string;
-      legacyPasswordHash?: string;
     } = {},
   ) {
-    const [seeded] = await setup.db.query<{ password: string }>(
-      'SELECT password FROM users WHERE user_id = ?',
+    const [seeded] = await setup.db.query<{ password_hash: string }>(
+      'SELECT password_hash FROM users WHERE user_id = ?',
       ['user-buyer'],
     );
-    const passwordHash = options.passwordHash ?? seeded!.password;
+    const passwordHash = options.passwordHash ?? seeded!.password_hash;
     await setup.db.execute(
       `UPDATE users
-          SET username = ?, display_name = ?, password_hash = ?,
-              password = ?, email = ?
+          SET username = ?, display_name = ?, password_hash = ?
         WHERE user_id = ?`,
       [
         options.username ?? 'demo_user',
         options.displayName ?? '山田 みどり',
         passwordHash,
-        options.legacyPasswordHash ?? passwordHash,
-        options.email ?? 'demo@minetenant.jp',
         'user-buyer',
       ],
     );
@@ -84,30 +78,26 @@ describe('username login cutover gate', () => {
     });
   }
 
-  it('keeps the legacy request and response contract while the gate is false', async () => {
-    const legacy = createClient(
+  it('uses the username contract even when the remaining compatibility gate is false', async () => {
+    const gateFalse = createClient(
       createApp({
         db: setup.db,
         config: { ...setup.config, usernameAuthEnabled: false },
       }),
     );
-    await expectStatus(await legacy.request('/api/v1/auth/csrf-cookie'), 204);
-
-    const rejected = await usernameLogin(legacy);
-    await expectStatus(rejected, 422);
-    expect((await rejected.json()).errors).toHaveProperty('email');
-
-    const response = await legacy.json('/api/v1/auth/login', 'POST', {
-      email: ' DEMO@MINETENANT.JP ',
-      password: 'password',
-    });
+    await expectStatus(
+      await gateFalse.request('/api/v1/auth/csrf-cookie'),
+      204,
+    );
+    const response = await usernameLogin(gateFalse);
     await expectStatus(response, 200);
     expect(await response.json()).toEqual({
       data: {
         id: 'user-buyer',
-        name: '山田 みどり',
+        username: 'demo_user',
+        displayName: '山田 みどり',
         role: 'buyer',
-        roleLabel: '購入者デモ',
+        roleLabel: '購入者',
         avatarInitial: '山',
         storeId: 'store-yamada',
       },
@@ -129,7 +119,6 @@ describe('username login cutover gate', () => {
         roleLabel: '購入者',
         avatarInitial: '山',
         storeId: 'store-yamada',
-        name: '山田 みどり',
       },
     });
     expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(
@@ -144,25 +133,22 @@ describe('username login cutover gate', () => {
     ).toEqual([]);
   });
 
-  it.each([
-    ['real legacy email', ' DEMO@MINETENANT.JP '],
-    ['synthetic legacy email', syntheticEmailCandidate('user-buyer', 0)],
-  ])(
-    'accepts a stored %s during the compatibility period',
-    async (kind, email) => {
-      if (kind.startsWith('synthetic')) await prepareBuyer({ email });
-
+  it.each(['demo@minetenant.jp', 'legacy+value@legacy.invalid'])(
+    'rejects the removed email identifier %s without rotating the session',
+    async (email) => {
+      const session = client.cookies.get(setup.config.sessionCookie);
       const response = await client.json('/api/v1/auth/login', 'POST', {
         email,
         password: 'password',
       });
-      await expectStatus(response, 200);
-      expect((await response.json()).data).toMatchObject({
-        id: 'user-buyer',
-        username: 'demo_user',
-        displayName: '山田 みどり',
-        name: '山田 みどり',
+      await expectStatus(response, 422);
+      expect(await response.json()).toEqual({
+        message: 'メールアドレスでのログインは利用できません。',
+        errors: {
+          email: ['メールアドレスでのログインは利用できません。'],
+        },
       });
+      expect(client.cookies.get(setup.config.sessionCookie)).toBe(session);
     },
   );
 
@@ -189,17 +175,14 @@ describe('username login cutover gate', () => {
     }
   });
 
-  it('rejects mixed username and email without choosing either login path', async () => {
+  it('rejects email even when a valid username is also present', async () => {
     const response = await client.json('/api/v1/auth/login', 'POST', {
       username: 'demo_user',
       email: 'demo@minetenant.jp',
       password: 'password',
     });
     await expectStatus(response, 422);
-    expect(Object.keys((await response.json()).errors).sort()).toEqual([
-      'email',
-      'username',
-    ]);
+    expect(Object.keys((await response.json()).errors)).toEqual(['email']);
   });
 
   it('reports every missing or non-string canonical credential', async () => {
@@ -237,51 +220,11 @@ describe('username login cutover gate', () => {
     expect(await wrongPassword.json()).toEqual(invalidCredentials);
     expect(await unknownUser.json()).toEqual(invalidCredentials);
 
-    const wrongLegacyPassword = await client.json(
-      '/api/v1/auth/login',
-      'POST',
-      {
-        email: 'demo@minetenant.jp',
-        password: 'wrong-password',
-      },
-    );
-    const unknownLegacyEmail = await client.json('/api/v1/auth/login', 'POST', {
-      email: 'unknown@minetenant.jp',
-      password: 'wrong-password',
-    });
-    await expectStatus(wrongLegacyPassword, 401);
-    await expectStatus(unknownLegacyEmail, 401);
-    expect(await wrongLegacyPassword.json()).toEqual(invalidCredentials);
-    expect(await unknownLegacyEmail.json()).toEqual(invalidCredentials);
-
     await prepareBuyer({ passwordHash: 'not-a-bcrypt-hash' });
     const corruptHash = await usernameLogin(client);
     await expectStatus(corruptHash, 401);
     expect(await corruptHash.json()).toEqual(invalidCredentials);
   });
-
-  it.each([
-    ['seven characters', 'a'.repeat(7), 422],
-    ['eight characters', 'password', 200],
-    ['72 bytes', 'a'.repeat(72), 200],
-    ['73 bytes', 'a'.repeat(73), 422],
-    ['a NUL character', 'password\0hidden', 422],
-  ] as const)(
-    'applies the canonical password rules to legacy email: %s',
-    async (_case, password, expectedStatus) => {
-      if (expectedStatus === 200) {
-        const passwordHash = await bcrypt.hash(password, 4);
-        await prepareBuyer({ passwordHash, legacyPasswordHash: passwordHash });
-      }
-      const response = await client.json('/api/v1/auth/login', 'POST', {
-        email: 'demo@minetenant.jp',
-        password,
-      });
-      await expectStatus(response, expectedStatus);
-      if (expectedStatus === 422)
-        expect((await response.json()).errors.password).toBeDefined();
-    },
-  );
 
   it('requires JSON media types and accepts an application/*+json media type', async () => {
     const payload = JSON.stringify({
@@ -318,44 +261,33 @@ describe('username login cutover gate', () => {
     await expectStatus(vendorJson, 200);
   });
 
-  it.each([
-    ['real email', 'demo@minetenant.jp'],
-    ['synthetic email', syntheticEmailCandidate('user-buyer', 0)],
-  ])(
-    'shares one five-attempt account bucket between username and %s',
-    async (_kind, email) => {
-      await prepareBuyer({ email });
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const response =
-          attempt % 2 === 0
-            ? await usernameLogin(client, ' DEMO_USER ', 'wrong-password')
-            : await client.json('/api/v1/auth/login', 'POST', {
-                email,
-                password: 'wrong-password',
-              });
-        await expectStatus(response, 401);
-      }
-
-      const limited = await client.json('/api/v1/auth/login', 'POST', {
-        email,
-        password: 'password',
-      });
-      await expectStatus(limited, 429);
-      expect(limited.headers.get('X-RateLimit-Limit')).toBe('5');
-      expect(limited.headers.get('X-RateLimit-Remaining')).toBe('0');
-      expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThan(0);
-      expect(Number(limited.headers.get('X-RateLimit-Reset'))).toBeGreaterThan(
-        Math.floor(Date.now() / 1000),
+  it('shares one five-attempt account bucket across normalized username forms', async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await usernameLogin(
+        client,
+        attempt % 2 === 0 ? ' DEMO_USER ' : 'demo_user',
+        'wrong-password',
       );
-    },
-  );
+      await expectStatus(response, 401);
+    }
 
-  it('rehashes a lower-cost canonical hash into both password columns', async () => {
+    const limited = await usernameLogin(client);
+    await expectStatus(limited, 429);
+    expect(limited.headers.get('X-RateLimit-Limit')).toBe('5');
+    expect(limited.headers.get('X-RateLimit-Remaining')).toBe('0');
+    expect(Number(limited.headers.get('Retry-After'))).toBeGreaterThan(0);
+    expect(Number(limited.headers.get('X-RateLimit-Reset'))).toBeGreaterThan(
+      Math.floor(Date.now() / 1000),
+    );
+  });
+
+  it('rehashes only the canonical password_hash column', async () => {
+    const [before] = await setup.db.query<{ password: string }>(
+      'SELECT password FROM users WHERE user_id = ?',
+      ['user-buyer'],
+    );
     const lowCostHash = await bcrypt.hash('password', 4);
-    await prepareBuyer({
-      passwordHash: lowCostHash,
-      legacyPasswordHash: lowCostHash,
-    });
+    await prepareBuyer({ passwordHash: lowCostHash });
     const stronger = createClient(
       createApp({
         db: setup.db,
@@ -371,18 +303,15 @@ describe('username login cutover gate', () => {
     }>('SELECT password, password_hash FROM users WHERE user_id = ?', [
       'user-buyer',
     ]);
-    expect(updated!.password).toBe(updated!.password_hash);
-    expect(updated!.password).not.toBe(lowCostHash);
-    expect(bcrypt.getRounds(updated!.password)).toBe(6);
-    expect(await bcrypt.compare('password', updated!.password)).toBe(true);
+    expect(updated!.password).not.toBe(updated!.password_hash);
+    expect(updated!.password).toBe(before!.password);
+    expect(bcrypt.getRounds(updated!.password_hash)).toBe(6);
+    expect(await bcrypt.compare('password', updated!.password_hash)).toBe(true);
   });
 
   it('does not downgrade a stronger hash', async () => {
     const strongerHash = await bcrypt.hash('password', 6);
-    await prepareBuyer({
-      passwordHash: strongerHash,
-      legacyPasswordHash: strongerHash,
-    });
+    await prepareBuyer({ passwordHash: strongerHash });
 
     await expectStatus(await usernameLogin(client), 200);
     const [unchanged] = await setup.db.query<{
@@ -391,15 +320,12 @@ describe('username login cutover gate', () => {
     }>('SELECT password, password_hash FROM users WHERE user_id = ?', [
       'user-buyer',
     ]);
-    expect(unchanged).toEqual({
-      password: strongerHash,
-      password_hash: strongerHash,
-    });
+    expect(unchanged!.password_hash).toBe(strongerHash);
   });
 
   it('accepts a canonical $2y$ hash without exposing or rewriting it', async () => {
     const hash = (await bcrypt.hash('password', 4)).replace(/\$2b\$/, '$2y$');
-    await prepareBuyer({ passwordHash: hash, legacyPasswordHash: hash });
+    await prepareBuyer({ passwordHash: hash });
 
     const response = await usernameLogin(client);
     await expectStatus(response, 200);

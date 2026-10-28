@@ -14,27 +14,28 @@ const invalidCredentials = {
   message: 'ユーザー名またはパスワードが正しくありません。',
 };
 
-interface StoredPasswords {
-  password: string;
+interface StoredPasswordHash {
   password_hash: string;
 }
 
 function databaseWithConcurrentPasswordUpdate(
   base: Database,
   latestHash: string,
-  source: 'password' | 'password_hash' = 'password_hash',
 ): { db: Database; casCalls: () => number } {
   let casCalls = 0;
   const db: Database = {
     query: (sql, params) => base.query(sql, params),
     async execute(sql, params) {
-      if (sql.includes(`AND BINARY ${source} = BINARY ?`) && casCalls === 0) {
+      if (
+        sql.includes('AND BINARY password_hash = BINARY ?') &&
+        casCalls === 0
+      ) {
         casCalls += 1;
         await base.execute(
           `UPDATE users
-              SET password = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP
+              SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
             WHERE user_id = ?`,
-          [latestHash, latestHash, 'user-buyer'],
+          [latestHash, 'user-buyer'],
         );
         return { affectedRows: 0 };
       }
@@ -69,49 +70,37 @@ describe('login password rehash compare-and-swap races', () => {
     const staleHash = await bcrypt.hash('password', 4);
     await setup.db.execute(
       `UPDATE users
-          SET username = ?, display_name = ?, password = ?, password_hash = ?
+          SET username = ?, display_name = ?, password_hash = ?
         WHERE user_id = ?`,
-      ['demo_user', '山田 みどり', staleHash, staleHash, 'user-buyer'],
+      ['demo_user', '山田 みどり', staleHash, 'user-buyer'],
     );
   }
 
-  async function clientForRace(
-    latestHash: string,
-    usernameAuthEnabled = true,
-  ): Promise<{
+  async function clientForRace(latestHash: string): Promise<{
     client: TestClient;
     casCalls: () => number;
   }> {
-    const race = databaseWithConcurrentPasswordUpdate(
-      setup.db,
-      latestHash,
-      usernameAuthEnabled ? 'password_hash' : 'password',
-    );
+    const race = databaseWithConcurrentPasswordUpdate(setup.db, latestHash);
     const client = createClient(
       createApp({
         db: race.db,
-        config: { ...setup.config, usernameAuthEnabled },
+        config: setup.config,
       }),
     );
     await expectStatus(await client.request('/api/v1/auth/csrf-cookie'), 204);
     return { client, casCalls: race.casCalls };
   }
 
-  async function login(
-    client: TestClient,
-    usernameAuthEnabled = true,
-  ): Promise<Response> {
+  async function login(client: TestClient): Promise<Response> {
     return client.json('/api/v1/auth/login', 'POST', {
-      ...(usernameAuthEnabled
-        ? { username: 'demo_user' }
-        : { email: 'demo@minetenant.jp' }),
+      username: 'demo_user',
       password: 'password',
     });
   }
 
-  async function storedPasswords(): Promise<StoredPasswords> {
-    const [stored] = await setup.db.query<StoredPasswords>(
-      'SELECT password, password_hash FROM users WHERE user_id = ?',
+  async function storedPasswordHash(): Promise<StoredPasswordHash> {
+    const [stored] = await setup.db.query<StoredPasswordHash>(
+      'SELECT password_hash FROM users WHERE user_id = ?',
       ['user-buyer'],
     );
     return stored!;
@@ -127,8 +116,7 @@ describe('login password rehash compare-and-swap races', () => {
 
     await expectStatus(response, 200);
     expect(casCalls()).toBe(1);
-    expect(await storedPasswords()).toEqual({
-      password: concurrentHash,
+    expect(await storedPasswordHash()).toEqual({
       password_hash: concurrentHash,
     });
     const authenticatedSession = client.cookies.get(
@@ -160,8 +148,7 @@ describe('login password rehash compare-and-swap races', () => {
     await expectStatus(response, 401);
     expect(await response.json()).toEqual(invalidCredentials);
     expect(casCalls()).toBe(1);
-    expect(await storedPasswords()).toEqual({
-      password: concurrentHash,
+    expect(await storedPasswordHash()).toEqual({
       password_hash: concurrentHash,
     });
     expect(client.cookies.get(setup.config.sessionCookie)).toBe(
@@ -173,48 +160,6 @@ describe('login password rehash compare-and-swap races', () => {
         [anonymousSession],
       ),
     ).toEqual([{ user_id: null }]);
-    await expectStatus(await client.request('/api/v1/auth/me'), 401);
-  });
-
-  it('uses the same CAS protection for the legacy password source', async () => {
-    await prepareCanonicalBuyer();
-    const concurrentHash = await bcrypt.hash('password', 8);
-    const { client, casCalls } = await clientForRace(concurrentHash, false);
-    const anonymousSession = client.cookies.get(setup.config.sessionCookie)!;
-
-    const response = await login(client, false);
-
-    await expectStatus(response, 200);
-    expect(casCalls()).toBe(1);
-    expect(await storedPasswords()).toEqual({
-      password: concurrentHash,
-      password_hash: concurrentHash,
-    });
-    expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(
-      anonymousSession,
-    );
-  });
-
-  it('does not authenticate a stale legacy password after a concurrent change', async () => {
-    await prepareCanonicalBuyer();
-    const concurrentHash = await bcrypt.hash('new-password', 8);
-    const { client, casCalls } = await clientForRace(concurrentHash, false);
-    const anonymousSession = client.cookies.get(setup.config.sessionCookie)!;
-
-    const response = await login(client, false);
-
-    await expectStatus(response, 422);
-    expect((await response.json()).errors).toEqual({
-      email: ['メールアドレスまたはパスワードが正しくありません。'],
-    });
-    expect(casCalls()).toBe(1);
-    expect(await storedPasswords()).toEqual({
-      password: concurrentHash,
-      password_hash: concurrentHash,
-    });
-    expect(client.cookies.get(setup.config.sessionCookie)).toBe(
-      anonymousSession,
-    );
     await expectStatus(await client.request('/api/v1/auth/me'), 401);
   });
 });

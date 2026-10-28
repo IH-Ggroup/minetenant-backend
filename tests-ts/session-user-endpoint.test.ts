@@ -72,7 +72,7 @@ describe('session user endpoint cutover gate', () => {
       }),
     );
     await expectStatus(await legacy.request('/api/v1/auth/csrf-cookie'), 204);
-    await expectStatus(await legacy.login(), 200);
+    await expectStatus(await legacy.login('demo_user'), 200);
 
     const response = await legacy.request('/api/v1/auth/me');
     await expectStatus(response, 200);

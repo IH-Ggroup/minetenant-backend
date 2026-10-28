@@ -232,7 +232,7 @@ describe('atomic MySQL purchases and deletion races', () => {
 
   it('keeps purchase history consistent when purchase and seller deletion race', async () => {
     const seller = createClient(test.app);
-    await expectStatus(await seller.login('seller@minetenant.jp'), 200);
+    await expectStatus(await seller.login('seller'), 200);
     const [bought, deleted] = await Promise.all([
       purchase('product-hoodie', 'user-buyer', 'delete-race'),
       seller.json('/api/v1/products/product-hoodie', 'DELETE'),
