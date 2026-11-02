@@ -515,10 +515,7 @@ export function createAuthRoutes(
 
   routes.get('/me', requireAuth, (c) => {
     const user = c.get('user')!;
-    if (!config.usernameAuthEnabled)
-      return c.json({ data: serializeUser(user) });
-    const dto = serializeSessionUser(user);
-    return c.json({ data: { ...dto, name: dto.displayName } });
+    return c.json({ data: serializeSessionUser(user) });
   });
   routes.post('/logout', requireAuth, async (c) => {
     await destroySession(c, db, config);

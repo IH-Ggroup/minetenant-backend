@@ -16,7 +16,7 @@ import {
   type TestClient,
 } from './helpers.js';
 
-describe('session user endpoint cutover gate', () => {
+describe('session user endpoint', () => {
   let setup: TestApp;
   let client: TestClient;
   let passwordHash: string;
@@ -64,31 +64,35 @@ describe('session user endpoint cutover gate', () => {
     );
   }
 
-  it('keeps the exact legacy response while the gate is false', async () => {
-    const legacy = createClient(
+  it('uses the final response even when the remaining compatibility gate is false', async () => {
+    const gateFalse = createClient(
       createApp({
         db: setup.db,
         config: { ...setup.config, usernameAuthEnabled: false },
       }),
     );
-    await expectStatus(await legacy.request('/api/v1/auth/csrf-cookie'), 204);
-    await expectStatus(await legacy.login(), 200);
+    await expectStatus(
+      await gateFalse.request('/api/v1/auth/csrf-cookie'),
+      204,
+    );
+    await expectStatus(await gateFalse.login(), 200);
 
-    const response = await legacy.request('/api/v1/auth/me');
+    const response = await gateFalse.request('/api/v1/auth/me');
     await expectStatus(response, 200);
     expect(await response.json()).toEqual({
       data: {
         id: 'user-buyer',
-        name: '山田 みどり',
+        username: 'demo_user',
+        displayName: '山田 みどり',
         role: 'buyer',
-        roleLabel: '購入者デモ',
+        roleLabel: '購入者',
         avatarInitial: '山',
         storeId: 'store-yamada',
       },
     });
   });
 
-  it('loads the current user by the session userId and returns the transitional response', async () => {
+  it('loads the current user by the session userId and returns the final response', async () => {
     await loginWithUsername(client);
     await setup.db.execute(
       'UPDATE users SET display_name = ? WHERE user_id = ?',
@@ -106,7 +110,6 @@ describe('session user endpoint cutover gate', () => {
         roleLabel: '購入者',
         avatarInitial: '更',
         storeId: 'store-yamada',
-        name: '更新後の表示名',
       },
     });
   });
@@ -137,7 +140,6 @@ describe('session user endpoint cutover gate', () => {
         roleLabel: '出品者',
         avatarInitial: '店',
         storeId: null,
-        name: '店舗なし利用者',
       },
     });
   });
