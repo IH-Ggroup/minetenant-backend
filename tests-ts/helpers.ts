@@ -151,10 +151,10 @@ export function createClient(app: Pick<Hono<AppEnv>, 'request'>) {
     cookies,
     request,
     json,
-    async login(email = 'demo@minetenant.jp', password = 'password') {
+    async login(username = 'demo', password = 'password') {
       const csrf = await request('/api/v1/auth/csrf-cookie');
       assert.equal(csrf.status, 204);
-      return json('/api/v1/auth/login', 'POST', { email, password });
+      return json('/api/v1/auth/login', 'POST', { username, password });
     },
   };
 }

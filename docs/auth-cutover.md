@@ -176,13 +176,14 @@ gate falseのemail loginは、照合後にcostを上げる場合だけ旧`passwo
 #98〜#103、#119、#120、#118と、#105〜#108、#106、#121は、通常のunit / integration testに加えて
 次を確認します。
 
-- gate falseで現行register / login / meのrequestとresponseが変わらない
+- #118の初回cutover releaseではgate falseで現行register / login / meのrequestとresponseが変わらない
 - 空DB、移行直後、#98記録後に追加されたNULL行、部分適用済みDB、連続applyでcommandが冪等に動く
 - 同じdatabaseへの同時check / applyまたはapply / applyの片方がnamed lock取得に失敗し、別databaseは
   独立して実行できる。lock取得から解放まで同じconnectionを使い、解放確認失敗時はconnectionを破棄する
 - strict SQL modeなし、UTC設定・確認失敗、予約username衝突、attempt 0〜99枯渇、不正hash、
   synthetic email不整合、display_name超過ではfail closedになる
-- rehashのbinary CAS競合で古いhashを上書きせず、旧新hashがbyte一致する
+- #105前はrehash後も旧新hashがbyte一致し、#105以後は`password_hash`だけのbinary CAS競合で
+  新しいhashを古い結果で上書きしない
 - #118ではmaintenance、旧instance / DB connection 0件、全新instanceの同一commit / gate trueを
   証跡で確認する
 - #118ではgate trueで新旧request、route-local adapter、session、CSRF、rate limit、CORSが契約どおり

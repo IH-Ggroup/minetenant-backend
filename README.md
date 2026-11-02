@@ -65,8 +65,9 @@ username認証は`USERNAME_AUTH_ENABLED`で段階的に切り替えます。loca
 `USERNAME_AUTH_ENABLED=true`を設定してAPIを再起動してください。
 productionでは`true`または`false`の明示設定が必須です。productionでの欠落・空文字と、
 全環境の`true` / `false`以外の値では起動しません。
-`false`ではemail方式のendpointと旧serializerだけを使います。`true`の共有環境への適用は、
-#101〜#103を含むreleaseを全API maintenance下で切り替える#118まで行いません。
+loginは設定値にかかわらずusername方式だけを受け付け、email入力は422です。#106まではregisterとmeに
+旧仕様の分岐が残りますが、#105以降の途中commitはproductionへ個別deployしません。共有環境では
+#105・#107・#108・#106を含むreleaseを#121のmaintenanceで同時に公開します。
 
 `0003_username_auth`適用後も、legacy registerが作る新しい認証3列すべてNULLの行は想定内です。
 #118のcutoverでは、共有trafficを`true`へ切り替える前に移行用commandで補完・検証します。

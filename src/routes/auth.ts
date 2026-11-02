@@ -6,7 +6,7 @@ import {
   bootstrapSession,
   checkAuthRateLimit,
   destroySession,
-  findAuthenticatedUser,
+  findUsernameLoginUser,
   requireAuth,
   rotateSession,
   rotateSessionWith,
@@ -18,7 +18,6 @@ import {
   isCanonicalUsername,
   normalizeUsername,
   parseLoginCredentials,
-  parseLoginPassword,
   parseRegisterCredentials,
 } from '../domain/auth-credentials.js';
 import { HttpError, ValidationError } from '../domain/errors.js';
@@ -44,10 +43,7 @@ const supportedBcryptHash = /^\$2[by]\$(?:0[4-9]|1[0-6])\$[./A-Za-z0-9]{53}$/;
 const invalidCredentialsMessage =
   'ユーザー名またはパスワードが正しくありません。';
 
-type PasswordSource = 'password' | 'password_hash';
-
-interface PasswordColumns {
-  password: string | null;
+interface PasswordHashColumn {
   password_hash: string | null;
 }
 
@@ -81,7 +77,6 @@ async function rehashPasswordIfNeeded({
   userId,
   password,
   storedHash,
-  source,
   dummyHash,
 }: {
   db: Database;
@@ -89,7 +84,6 @@ async function rehashPasswordIfNeeded({
   userId: string;
   password: string;
   storedHash: string;
-  source: PasswordSource;
   dummyHash: string;
 }): Promise<boolean> {
   const comparable = comparableBcryptHash(storedHash);
@@ -100,19 +94,19 @@ async function rehashPasswordIfNeeded({
   const replacement = await bcrypt.hash(password, config.bcryptRounds);
   const result = await db.execute(
     `UPDATE users
-        SET password = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE user_id = ? AND BINARY ${source} = BINARY ?`,
-    [replacement, replacement, userId, storedHash],
+        SET password_hash = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND BINARY password_hash = BINARY ?`,
+    [replacement, userId, storedHash],
   );
   if (result.affectedRows > 0) return true;
 
   // A concurrent password update won the compare-and-swap. Authenticate the
   // value that is current now, but never overwrite it with our stale result.
-  const [latest] = await db.query<PasswordColumns>(
-    'SELECT password, password_hash FROM users WHERE user_id = ? LIMIT 1',
+  const [latest] = await db.query<PasswordHashColumn>(
+    'SELECT password_hash FROM users WHERE user_id = ? LIMIT 1',
     [userId],
   );
-  return passwordMatches(password, latest?.[source], dummyHash);
+  return passwordMatches(password, latest?.password_hash, dummyHash);
 }
 
 async function emailAccountKey(
@@ -132,7 +126,10 @@ async function emailAccountKey(
     : `email:${email}`;
 }
 
-async function authAccountKey(db: Database, body: Input): Promise<string> {
+async function registrationAccountKey(
+  db: Database,
+  body: Input,
+): Promise<string> {
   if (typeof body.username === 'string')
     return `username:${normalizeUsername(body.username)}`;
   if (typeof body.email === 'string')
@@ -140,12 +137,16 @@ async function authAccountKey(db: Database, body: Input): Promise<string> {
   return 'empty';
 }
 
-function rejectMixedLoginIdentifiers(body: Input): void {
-  if (!Object.hasOwn(body, 'username') || !Object.hasOwn(body, 'email')) return;
-  const message = 'ユーザー名とメールアドレスは同時に指定できません。';
+function loginAccountKey(body: Input): string {
+  return typeof body.username === 'string'
+    ? `username:${normalizeUsername(body.username)}`
+    : 'empty';
+}
+
+function rejectRemovedLoginFields(body: Input): void {
+  if (!Object.hasOwn(body, 'email')) return;
   throw new ValidationError({
-    username: [message],
-    email: [message],
+    email: ['メールアドレスでのログインは利用できません。'],
   });
 }
 
@@ -259,26 +260,6 @@ function credentials(data: Input, register: boolean) {
   return { email: email!, password: password!, name: name! };
 }
 
-function compatibleEmailLoginCredentials(data: Input): {
-  email: string;
-  password: string;
-} {
-  if (typeof data.email === 'string') data.email = normalizeEmail(data.email);
-  const validator = new Validator(data);
-  const email = validateEmail(validator);
-  let password: string | undefined;
-  try {
-    password = parseLoginPassword(data);
-  } catch (error) {
-    if (!(error instanceof ValidationError)) throw error;
-    for (const [field, messages] of Object.entries(error.errors ?? {})) {
-      for (const message of messages) validator.add(field, message);
-    }
-  }
-  validator.throwIfInvalid();
-  return { email: email!, password: password! };
-}
-
 export function createAuthRoutes(
   db: Database,
   config: AppConfig,
@@ -302,7 +283,7 @@ export function createAuthRoutes(
       // Keep raw canonical values intact while applying legacy normalization
       // only when the temporary legacy request contract is selected.
       const body = await parseJsonBody(c.req.raw);
-      await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
+      await checkAuthRateLimit(c, db, () => registrationAccountKey(db, body));
       const kind = registerRequestKind(body);
 
       let registration: Registration;
@@ -418,80 +399,24 @@ export function createAuthRoutes(
   });
 
   routes.post('/login', async (c) => {
-    if (config.usernameAuthEnabled) {
-      const body = await parseJsonBody(c.req.raw);
-      await checkAuthRateLimit(c, db, () => authAccountKey(db, body));
-      rejectMixedLoginIdentifiers(body);
+    const body = await parseJsonBody(c.req.raw);
+    await checkAuthRateLimit(c, db, () => loginAccountKey(body));
+    rejectRemovedLoginFields(body);
+    const { username, password } = parseLoginCredentials(body);
 
-      let identifier: 'username' | 'email';
-      let value: string;
-      let password: string;
-      if (Object.hasOwn(body, 'email')) {
-        const legacy = compatibleEmailLoginCredentials(body);
-        identifier = 'email';
-        value = legacy.email;
-        password = legacy.password;
-      } else {
-        const current = parseLoginCredentials(body);
-        identifier = 'username';
-        value = current.username;
-        password = current.password;
-      }
-
-      const user = await findAuthenticatedUser(db, identifier, value);
-      const resolvedDummyHash = await dummyHash;
-      const valid = await passwordMatches(
-        password,
-        user?.password_hash,
-        resolvedDummyHash,
-      );
-      if (!user || !valid) throw new HttpError(401, invalidCredentialsMessage);
-
-      // Validate the full public row before mutating credentials or rotating
-      // the session. Cutover preflight should make this a no-op in practice.
-      const dto = serializeSessionUser(user);
-      const currentHash = user.password_hash;
-      if (
-        typeof currentHash !== 'string' ||
-        !(await rehashPasswordIfNeeded({
-          db,
-          config,
-          userId: user.user_id,
-          password,
-          storedHash: currentHash,
-          source: 'password_hash',
-          dummyHash: resolvedDummyHash,
-        }))
-      ) {
-        throw new HttpError(401, invalidCredentialsMessage);
-      }
-
-      await rotateSession(c, db, config, user.user_id);
-      return c.json({ data: { ...dto, name: dto.displayName } });
-    }
-
-    const body = await parseBody(c.req.raw);
-    await checkAuthRateLimit(c, db, () =>
-      emailAccountKey(
-        db,
-        typeof body.email === 'string' ? body.email : '',
-        false,
-      ),
-    );
-    const { email, password } = credentials(body, false);
-    const user = await findAuthenticatedUser(db, 'email', email);
+    const user = await findUsernameLoginUser(db, username);
     const resolvedDummyHash = await dummyHash;
-    const storedHash = user?.password;
+    const storedHash = user?.password_hash;
     const valid = await passwordMatches(
       password,
       storedHash,
       resolvedDummyHash,
     );
-    if (!user || !valid) {
-      throw new ValidationError({
-        email: ['メールアドレスまたはパスワードが正しくありません。'],
-      });
-    }
+    if (!user || !valid) throw new HttpError(401, invalidCredentialsMessage);
+
+    // Validate the public response before mutating credentials or rotating the
+    // session. Cutover preflight should make this a no-op in practice.
+    const dto = serializeSessionUser(user);
     if (
       typeof storedHash !== 'string' ||
       !(await rehashPasswordIfNeeded({
@@ -500,17 +425,13 @@ export function createAuthRoutes(
         userId: user.user_id,
         password,
         storedHash,
-        source: 'password',
         dummyHash: resolvedDummyHash,
       }))
     ) {
-      throw new ValidationError({
-        email: ['メールアドレスまたはパスワードが正しくありません。'],
-      });
+      throw new HttpError(401, invalidCredentialsMessage);
     }
     await rotateSession(c, db, config, user.user_id);
-    c.set('user', user);
-    return c.json({ data: serializeUser(user) });
+    return c.json({ data: dto });
   });
 
   routes.get('/me', requireAuth, (c) => {

@@ -272,7 +272,6 @@ describe('safe migration and initial data setup', () => {
           roleLabel: '購入者',
           avatarInitial: '山',
           storeId: 'store-yamada',
-          name: '山田 みどり',
         },
       },
       {
@@ -285,7 +284,6 @@ describe('safe migration and initial data setup', () => {
           roleLabel: '出品者',
           avatarInitial: '青',
           storeId: 'store-mine',
-          name: '青鉱舎 店長',
         },
       },
     ] as const;
@@ -302,7 +300,9 @@ describe('safe migration and initial data setup', () => {
 
       const me = await client.request('/api/v1/auth/me');
       await expectStatus(me, 200);
-      expect(await me.json()).toEqual({ data: account.data });
+      expect(await me.json()).toEqual({
+        data: { ...account.data, name: account.data.displayName },
+      });
     }
   });
 

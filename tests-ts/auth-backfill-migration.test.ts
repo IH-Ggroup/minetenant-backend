@@ -344,13 +344,10 @@ describe('0003 username auth migration and catch-up command', () => {
     );
 
     const client = createClient(test.app);
-    await expectStatus(
-      await client.login('buyer@example.test', 'migration-password'),
-      200,
-    );
+    await expectStatus(await client.login('demo', 'migration-password'), 200);
   });
 
-  it('keeps legacy and new password hashes aligned when login upgrades bcrypt cost', async () => {
+  it('upgrades only password_hash and leaves the pre-release check fail closed', async () => {
     const password = 'rehash-password';
     const originalHash = await bcrypt.hash(password, 4);
     const strongerPassword = 'stronger-password';
@@ -374,11 +371,14 @@ describe('0003 username auth migration and catch-up command', () => {
       }),
     );
     await expectStatus(
-      await client.login('rehash@example.test', password),
+      await client.login(usernameCandidate('rehash-user', 0), password),
       200,
     );
     await expectStatus(
-      await client.login('stronger-hash@example.test', strongerPassword),
+      await client.login(
+        usernameCandidate('stronger-hash-user', 0),
+        strongerPassword,
+      ),
       200,
     );
 
@@ -393,23 +393,18 @@ describe('0003 username auth migration and catch-up command', () => {
         ORDER BY BINARY user_id`,
     );
     const rehash = hashes[0]!;
-    expect(rehash!.password).not.toBe(originalHash);
-    expect(rehash!.passwordHash).toBe(rehash!.password);
-    expect(bcrypt.getRounds(rehash!.password)).toBe(5);
-    expect(await bcrypt.compare(password, rehash!.password)).toBe(true);
+    expect(rehash.password).toBe(originalHash);
+    expect(rehash.passwordHash).not.toBe(originalHash);
+    expect(bcrypt.getRounds(rehash.passwordHash)).toBe(5);
+    expect(await bcrypt.compare(password, rehash.passwordHash)).toBe(true);
     expect(hashes[1]).toEqual({
       userId: 'stronger-hash-user',
       password: strongerHash,
       passwordHash: strongerHash,
     });
-    await expect(runAuthBackfill(test.db, 'check')).resolves.toMatchObject({
-      plannedUpdateRows: 0,
-      updatedRows: 0,
-    });
-    await expect(runAuthBackfill(test.db, 'apply')).resolves.toMatchObject({
-      plannedUpdateRows: 0,
-      updatedRows: 0,
-    });
+    await expect(runAuthBackfill(test.db, 'check')).rejects.toBeInstanceOf(
+      AuthBackfillDataError,
+    );
   });
 
   it('catches up rows written after migration history and remains idempotent', async () => {

@@ -444,16 +444,9 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
-`USERNAME_AUTH_ENABLED=true`の互換期間では、上記の`{ username, password }`を正としながら、
-#105・#121まで旧`{ email, password }`もJSONとして受理します。両方のidentifierを送ったrequestは
-422とし、`errors.username`と`errors.email`の両方を返します。旧emailが実在・syntheticのどちらでも、
-保存済みusernameへ解決して同じ認証・rate-limit経路を使います。未知emailとpassword不一致も、
-未知usernameと同じform-level 401です。
-
-この期間のlogin成功responseと`GET /auth/me`は、7 fieldのUser DTOへ
-`"name": dto.displayName`を加えます。これは旧Front向けのroute-local adapterであり、emailや
-password hashは返しません。#105はlogin、#107はmeのresponseから`name`を削除し、#121の
-互換削除releaseで同時に公開します。
+loginは`{ username, password }`だけを受理します。`email`が送られた場合はusernameが同時に正しくても
+422 `errors.email`とし、削除済みfieldを無視しません。成功responseは上記7 fieldだけで、旧`name`、
+email、password hashを返しません。この変更は#107・#108・#106とともに#121で本番公開します。
 
 形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
 どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
@@ -544,17 +537,10 @@ routeへ到達した成功・401・422の試行をどちらも消費します。
 消費しません。一方のbucketですでに拒否されたrequestは、もう一方の残数を消費しません。
 usernameがstringなら形式不正でもtrimしてASCII `A-Z`だけを小文字化し、欠落またはstring以外なら
 空identifierを作ります。
-canonical account keyは`username:<normalized username>`です。未登録usernameも同じkeyを使うため、
-成功したregisterの直後にloginしても別bucketへ切り替わりません。DBで既存利用者へ解決できた
-legacy real emailとsynthetic emailは、その行の保存済みusernameへ写像します。未知emailだけ
-`email:<normalized email>`、identifier欠落は`empty`を使います。新旧fieldが混在するrequestは
-username string、email string、emptyの優先順で一つのkeyを決めます。これにより同じ利用者の
-usernameとemailを交互に使って5回制限を迂回できません。不正入力もIP bucketと空または正規化済み
-identifier bucketを消費します。
-
-email aliasのlookupはlegacy loginを受ける#105まで、legacy registerのemail key生成は#106までの
-期限付き互換です。#121の互換削除release後はproduction API runtimeから旧email readerをなくし、
-usernameと空identifierだけで同じrate-limit規則を維持します。
+loginのcanonical account keyは`username:<normalized username>`、username欠落またはstring以外は
+`empty`です。未登録usernameも同じkeyを使います。legacy registerだけは#106まで、既存emailなら
+保存済みusernameへ写像し、未知emailなら`email:<normalized email>`を使います。#105でloginのemail
+alias lookupは削除済みで、email loginを試してもaccount解決queryを行いません。
 
 account解決queryの前にIP bucketがblock済みかを確認し、block済みならalias lookupもaccount bucketの
 更新も行いません。未blockならaliasを解決した後、一つのtransactionでIP bucketを再checkして両bucketを
@@ -562,7 +548,7 @@ lockします。どちらかが上限なら両方とも増やさず、両方に�
 永続的なaccount lock、`423 Locked`、unlock APIは設けません。429はform-levelで表示し、
 フロントは`Retry-After`が示すwindow終了まで再送を抑止します。
 
-rate-limit keyにはpasswordを絶対に含めません。canonical username（既知accountまたはusername候補）、
+rate-limit keyにはpasswordを絶対に含めません。canonical username、legacy registerでだけ使う
 type prefix付きの未知email、emptyのいずれかとIPを組み立てたbucket keyはSHA-256にしてからDBへ保存し、
 生値をDBやlogへ残しません。通常responseには現在の最も厳しいbucketの
 `X-RateLimit-Limit`と`X-RateLimit-Remaining`を返します。429にはさらに秒数の`Retry-After`と
@@ -618,7 +604,7 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 `201 Created`と`data: User`を返します。店舗は`level: 1`、0 points、`offline`から
 始まります。登録ユーザーの`role`は`buyer`ですが、自分の店舗に出品できます。
 
-#### legacyログイン・状態復元・ログアウト
+#### usernameログイン・legacy状態復元・ログアウト
 
 ```http
 POST /api/v1/auth/login
@@ -628,12 +614,13 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 
 ```json
 {
-  "email": "demo@minetenant.jp",
+  "username": "demo",
   "password": "password"
 }
 ```
 
-ログイン成功時と`GET /auth/me`は、次の形でユーザーを返します。
+ログインはgateにかかわらずusername方式だけを受け付け、完成時の7 fieldを返します。email入力は
+422 `errors.email`です。gateがfalseの`GET /auth/me`だけは、次のlegacy responseを維持します。
 
 ```json
 {
@@ -648,10 +635,9 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
-`GET /auth/me`が401なら未ログインです。パスワードが違うログインは
-422と`errors.email`を返します。`POST /auth/logout`成功時は204で本文がありません。
-ログイン・登録には、IPごとに毎分30回、メールアドレスとIPの組み合わせごとに
-毎分5回の制限があります。
+`GET /auth/me`が401なら未ログインです。usernameまたはpasswordが違うログインはform-level 401です。
+`POST /auth/logout`成功時は204で本文がありません。ログイン・登録には、IPごとに毎分30回、
+canonical accountとIPの組み合わせごとに毎分5回の制限があります。
 
 ### 移行順と互換期間
 
@@ -679,13 +665,11 @@ register route scopeに含まれないため、[B-AUTH-CUTOVER #118](https://git
 運用手順は[`auth-cutover.md`](./auth-cutover.md)です。#103の二重書き込みが有効になる前に#101 / #102へ
 trafficを流さず、#109の最終backfillをcutover確認の代わりにしません。
 
-`USERNAME_AUTH_ENABLED`は#101〜#103が共有するcutover gateです。local / testでは欠落時
+`USERNAME_AUTH_ENABLED`は#101〜#103が共有したcutover gateです。local / testでは欠落時
 `false`、`APP_ENV=production`では明示設定を必須とし、欠落・空文字・`true` / `false`以外は設定errorで
-起動しません。`false`ではlegacy email endpointと旧serializerだけを実行し、新認証codeへtrafficを
-流しません。`true`では実装済みendpointの新経路を使い、loginは`{ username, password }`を正として
-期限付きの旧`{ email, password }`も受理します。#103はcutover後の新旧register requestを新旧列へ
-互換書き込みします。cutover後のrollbackはdata互換でも、logout済みのusername登録
-利用者へ旧email loginを透過的に提供できないため、runbookどおりmaintenanceとforward-fixを優先します。
+起動しません。#105以降のloginはgateを参照せずusername経路だけを使います。registerとmeの旧分岐は
+#106まで残りますが、この途中状態はproductionへdeployしません。#103のregisterはcutover後も新旧requestを
+新旧列へ互換書き込みし、#106で旧requestと旧列writeを同時に削除します。
 
 #101〜#103のgate true経路は`POST /auth/login`、`GET /auth/me`、`POST /auth/register`を
 新User DTOへ切り替えます。registerは新username requestを正としながら、#106まではlegacy requestも
@@ -711,11 +695,9 @@ emailで登録できるのにemailではloginできない中間状態を作り�
 既知の旧列accessとして残り、#106でruntime旧列reader / writerを0件にします。
 
 #100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設し、現行`GET /users`が使う
-legacy `serializeUser`を変更しません。この期間のregister / login / me routeは前者の結果へ
-`"name": dto.displayName`を足す薄いlegacy adapterをそれぞれ持ち、deprecated fieldを**必ず**
-併記します。#105、#106、#107は対象endpointのadapterだけを削除し、他endpointの
-互換responseを変えません。#108は利用者列挙を避けるため`GET /users`と参照・test・docsを削除します。emailと
-秘密情報は互換期間中もresponseへ返しません。
+legacy `serializeUser`を変更しません。#105でloginの旧`name` adapterは削除済みです。registerとmeの
+adapterは#106・#107がそれぞれ削除し、他endpointの互換responseを変えません。#108は利用者列挙を
+避けるため`GET /users`と参照・test・docsを削除します。emailと秘密情報は互換期間中もresponseへ返しません。
 
 password rehashの正本切替、binary CAS、旧新両列の同一transaction更新も
 [`auth-cutover.md`](./auth-cutover.md)を正本とします。loginは#105まで、registerは#106まで片方だけを
