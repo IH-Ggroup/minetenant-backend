@@ -75,7 +75,7 @@ describe('session user endpoint', () => {
       await gateFalse.request('/api/v1/auth/csrf-cookie'),
       204,
     );
-    await expectStatus(await gateFalse.login(), 200);
+    await loginWithUsername(gateFalse);
 
     const response = await gateFalse.request('/api/v1/auth/me');
     await expectStatus(response, 200);

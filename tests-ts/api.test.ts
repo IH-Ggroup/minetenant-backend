@@ -37,7 +37,7 @@ describe('Hono API on MySQL', () => {
     seller = createClient(test.app);
     guest = createClient(test.app);
     await expectStatus(await buyer.login(), 200);
-    await expectStatus(await seller.login('seller@minetenant.jp'), 200);
+    await expectStatus(await seller.login('seller'), 200);
   });
   afterAll(async () => {
     await test?.close();
