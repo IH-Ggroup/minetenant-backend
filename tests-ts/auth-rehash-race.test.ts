@@ -54,7 +54,6 @@ describe('login password rehash compare-and-swap races', () => {
   beforeAll(async () => {
     setup = await createTestApp({
       bcryptRounds: 6,
-      usernameAuthEnabled: true,
     });
   });
 

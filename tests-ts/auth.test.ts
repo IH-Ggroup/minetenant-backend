@@ -49,29 +49,40 @@ describe('session authentication', () => {
     const originalSession = client.cookies.get(setup.config.sessionCookie);
     const originalToken = client.cookies.get('XSRF-TOKEN');
     const response = await client.json('/api/v1/auth/register', 'POST', {
-      name: ' 田中 太郎 ',
-      email: ' TANAKA@EXAMPLE.COM ',
+      username: ' TANAKA_TARO ',
+      displayName: ' 田中 太郎 ',
       password: 'strong-password',
       role: 'seller',
       points: 999999,
     });
     await expectStatus(response, 201);
     const { data } = await response.json();
-    expect(data).toMatchObject({
-      name: '田中 太郎',
+    expect(data).toEqual({
+      id: expect.any(String),
+      username: 'tanaka_taro',
+      displayName: '田中 太郎',
       role: 'buyer',
       roleLabel: '購入者',
       avatarInitial: '田',
+      storeId: expect.any(String),
     });
-    expect(Object.keys(data).sort()).toEqual(
-      ['avatarInitial', 'id', 'name', 'role', 'roleLabel', 'storeId'].sort(),
-    );
     const [user] = await setup.db.query<{
-      email: string;
-      password: string;
-    }>('SELECT email, password FROM users WHERE user_id = ?', [data.id]);
-    expect(user!.email).toBe('tanaka@example.com');
-    expect(await bcrypt.compare('strong-password', user!.password)).toBe(true);
+      username: string;
+      password_hash: string;
+      email: null;
+      password: null;
+    }>(
+      'SELECT username, password_hash, email, password FROM users WHERE user_id = ?',
+      [data.id],
+    );
+    expect(user).toMatchObject({
+      username: 'tanaka_taro',
+      email: null,
+      password: null,
+    });
+    expect(await bcrypt.compare('strong-password', user!.password_hash)).toBe(
+      true,
+    );
     const [store] = await setup.db.query<{
       user_id: string;
       name: string;
@@ -99,22 +110,10 @@ describe('session authentication', () => {
         [originalSession],
       ),
     ).toEqual([]);
-    // This gate-false register path writes only the legacy auth columns. After
-    // #107, /auth/me deliberately requires the canonical columns and cannot
-    // serialize this transitional row. #121 deploys #106 with this change, so
-    // verify the registration contract's session rotation directly here.
-    const authenticatedSession = client.cookies.get(
-      setup.config.sessionCookie,
-    )!;
-    expect(
-      await setup.db.query<{ user_id: string | null }>(
-        'SELECT user_id FROM hono_sessions WHERE session_id = ?',
-        [authenticatedSession],
-      ),
-    ).toEqual([{ user_id: data.id }]);
+    await expectStatus(await client.request('/api/v1/auth/me'), 200);
   });
 
-  it('rejects duplicate email after normalization without creating an extra store', async () => {
+  it('rejects removed registration fields without creating a store', async () => {
     const response = await client.json('/api/v1/auth/register', 'POST', {
       name: '新しい購入者',
       email: ' DEMO@MINETENANT.JP ',
@@ -122,7 +121,7 @@ describe('session authentication', () => {
     });
     await expectStatus(response, 422);
     expect((await response.json()).errors.email).toEqual([
-      'このメールアドレスは既に登録されています。',
+      'この登録項目は利用できません。',
     ]);
     expect(
       await setup.db.query('SELECT user_id FROM users WHERE name = ?', [
@@ -132,12 +131,12 @@ describe('session authentication', () => {
     await expectStatus(await client.request('/api/v1/auth/me'), 401);
   });
 
-  it('handles concurrent registration of the same email with one atomic user/store creation', async () => {
+  it('handles concurrent registration of the same username with one atomic user/store creation', async () => {
     const second = createClient(setup.app);
     await second.request('/api/v1/auth/csrf-cookie');
     const payload = {
-      name: '同時登録',
-      email: 'race@example.com',
+      username: 'auth_race_user',
+      displayName: '同時登録',
       password: 'strong-password',
     };
     const responses = await Promise.all([
@@ -148,12 +147,12 @@ describe('session authentication', () => {
       201, 422,
     ]);
     const rejected = responses.find((response) => response.status === 422)!;
-    expect((await rejected.json()).errors.email).toEqual([
-      'このメールアドレスは既に登録されています。',
+    expect((await rejected.json()).errors.username).toEqual([
+      'このユーザー名は既に登録されています。',
     ]);
     const users = await setup.db.query<{ user_id: string }>(
-      'SELECT user_id FROM users WHERE email = ?',
-      ['race@example.com'],
+      'SELECT user_id FROM users WHERE username = ?',
+      ['auth_race_user'],
     );
     expect(users).toHaveLength(1);
     expect(
@@ -163,23 +162,23 @@ describe('session authentication', () => {
     ).toHaveLength(1);
   });
 
-  it('validates registration fields, including optional password confirmation', async () => {
+  it('validates canonical registration fields and password confirmation', async () => {
     const response = await client.json('/api/v1/auth/register', 'POST', {
-      name: '',
-      email: 'not-an-email',
+      username: 'ab',
+      displayName: 42,
       password: 'short',
-      password_confirmation: 'different',
+      passwordConfirmation: 'different',
     });
     await expectStatus(response, 422);
     expect(Object.keys((await response.json()).errors).sort()).toEqual(
-      ['name', 'email', 'password', 'password_confirmation'].sort(),
+      ['username', 'displayName', 'password', 'passwordConfirmation'].sort(),
     );
     await expectStatus(
       await client.json('/api/v1/auth/register', 'POST', {
-        name: '確認する購入者',
-        email: 'confirmation@example.com',
+        username: 'confirmation_user',
+        displayName: '確認する購入者',
         password: 'strong-password',
-        password_confirmation: 'strong-password',
+        passwordConfirmation: 'strong-password',
       }),
       201,
     );
@@ -189,15 +188,15 @@ describe('session authentication', () => {
     'rejects unsafe bcrypt registration input %j',
     async (password) => {
       const response = await client.json('/api/v1/auth/register', 'POST', {
-        name: '購入者',
-        email: 'unsafe@example.com',
+        username: 'unsafe_user',
+        displayName: '購入者',
         password,
       });
       await expectStatus(response, 422);
       expect((await response.json()).errors.password).toBeDefined();
       expect(
-        await setup.db.query('SELECT user_id FROM users WHERE email = ?', [
-          'unsafe@example.com',
+        await setup.db.query('SELECT user_id FROM users WHERE username = ?', [
+          'unsafe_user',
         ]),
       ).toEqual([]);
     },
