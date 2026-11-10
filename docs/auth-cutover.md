@@ -27,8 +27,9 @@ HTTP契約は[`api.md`](./api.md)、完成時schemaとbackfill規則は[`databas
 `USERNAME_AUTH_ENABLED=false`ではlegacy email endpointと旧serializerだけを公開し、新認証codeへ
 trafficを流しません。個別の#101 / #102 / #103をmergeしても共有環境は`false`を維持し、#118の
 maintenance windowでだけ一括して有効化します。最初のcutover成功後から#106まではproduction設定を
-明示的な`true`へ固定し、
-欠落または`false`の通常deployを失敗させます。#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
+明示的な`true`へ固定し、欠落または`false`の通常deployを失敗させます。#107を単独で実行すると、
+gate falseのlegacy registerが作る新認証3列NULLの行は最終`GET /auth/me` responseへ変換できません。
+#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
 途中commitをproductionへdeployしません。#106まで含む一つの互換削除maintenance releaseで、legacy
 login / me / users / register、旧列access、最後のfalse branch、config、testを同時に削除します。
 
