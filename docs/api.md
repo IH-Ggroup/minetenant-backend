@@ -445,8 +445,9 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 ```
 
 loginは`{ username, password }`だけを受理します。`email`が送られた場合はusernameが同時に正しくても
-422 `errors.email`とし、削除済みfieldを無視しません。成功responseは上記7 fieldだけで、旧`name`、
-email、password hashを返しません。この変更は#107・#108・#106とともに#121で本番公開します。
+422 `errors.email`とし、削除済みfieldを無視しません。login成功responseと`GET /auth/me`は
+上記7 fieldだけを返し、旧`name`、email、password hashを含めません。この変更は
+#108・#106とともに#121で本番公開します。
 
 形式が正しい未登録usernameとpassword不一致は、status・body・headerで存在有無を区別せず、
 どちらも次のform-level `401`にします。未知の利用者でもbcrypt dummy hashをcompareし、
@@ -620,22 +621,8 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 ```
 
 ログインはgateにかかわらずusername方式だけを受け付け、完成時の7 fieldを返します。email入力は
-422 `errors.email`です。gateがfalseの`GET /auth/me`だけは、次のlegacy responseを維持します。
-
-```json
-{
-  "data": {
-    "id": "user-buyer",
-    "name": "山田 みどり",
-    "role": "buyer",
-    "roleLabel": "購入者デモ",
-    "avatarInitial": "山",
-    "storeId": "store-yamada"
-  }
-}
-```
-
-`GET /auth/me`が401なら未ログインです。usernameまたはpasswordが違うログインはform-level 401です。
+422 `errors.email`です。`GET /auth/me`もgateにかかわらず同じ7 fieldを返し、401なら未ログインです。
+usernameまたはpasswordが違うログインはform-level 401です。
 `POST /auth/logout`成功時は204で本文がありません。ログイン・登録には、IPごとに毎分30回、
 canonical accountとIPの組み合わせごとに毎分5回の制限があります。
 
@@ -667,8 +654,9 @@ trafficを流さず、#109の最終backfillをcutover確認の代わりにしま
 
 `USERNAME_AUTH_ENABLED`は#101〜#103が共有したcutover gateです。local / testでは欠落時
 `false`、`APP_ENV=production`では明示設定を必須とし、欠落・空文字・`true` / `false`以外は設定errorで
-起動しません。#105以降のloginはgateを参照せずusername経路だけを使います。registerとmeの旧分岐は
-#106まで残りますが、この途中状態はproductionへdeployしません。#103のregisterはcutover後も新旧requestを
+起動しません。#105以降のloginはusername経路だけを使い、#107以降の`GET /auth/me`は
+gateを参照せず最終User responseだけを返します。registerの旧分岐は#106まで残りますが、
+この途中状態はproductionへdeployしません。#103のregisterはcutover後も新旧requestを
 新旧列へ互換書き込みし、#106で旧requestと旧列writeを同時に削除します。
 
 #101〜#103のgate true経路は`POST /auth/login`、`GET /auth/me`、`POST /auth/register`を
@@ -695,8 +683,8 @@ emailで登録できるのにemailではloginできない中間状態を作り�
 既知の旧列accessとして残り、#106でruntime旧列reader / writerを0件にします。
 
 #100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設し、現行`GET /users`が使う
-legacy `serializeUser`を変更しません。#105でloginの旧`name` adapterは削除済みです。registerとmeの
-adapterは#106・#107がそれぞれ削除し、他endpointの互換responseを変えません。#108は利用者列挙を
+legacy `serializeUser`を変更しません。#105でlogin、#107でmeの旧`name` adapterを削除済みです。
+#106でregisterのadapterを削除し、他endpointの互換responseを変えません。#108は利用者列挙を
 避けるため`GET /users`と参照・test・docsを削除します。emailと秘密情報は互換期間中もresponseへ返しません。
 
 password rehashの正本切替、binary CAS、旧新両列の同一transaction更新も

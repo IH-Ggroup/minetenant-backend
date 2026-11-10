@@ -300,9 +300,7 @@ describe('safe migration and initial data setup', () => {
 
       const me = await client.request('/api/v1/auth/me');
       await expectStatus(me, 200);
-      expect(await me.json()).toEqual({
-        data: { ...account.data, name: account.data.displayName },
-      });
+      expect(await me.json()).toEqual({ data: account.data });
     }
   });
 

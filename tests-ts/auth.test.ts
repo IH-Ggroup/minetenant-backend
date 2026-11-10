@@ -99,9 +99,19 @@ describe('session authentication', () => {
         [originalSession],
       ),
     ).toEqual([]);
-    const me = await client.request('/api/v1/auth/me');
-    await expectStatus(me, 200);
-    expect(await me.json()).toEqual({ data });
+    // This gate-false register path writes only the legacy auth columns. After
+    // #107, /auth/me deliberately requires the canonical columns and cannot
+    // serialize this transitional row. #121 deploys #106 with this change, so
+    // verify the registration contract's session rotation directly here.
+    const authenticatedSession = client.cookies.get(
+      setup.config.sessionCookie,
+    )!;
+    expect(
+      await setup.db.query<{ user_id: string | null }>(
+        'SELECT user_id FROM hono_sessions WHERE session_id = ?',
+        [authenticatedSession],
+      ),
+    ).toEqual([{ user_id: data.id }]);
   });
 
   it('rejects duplicate email after normalization without creating an extra store', async () => {

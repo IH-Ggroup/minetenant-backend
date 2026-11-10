@@ -27,8 +27,9 @@ HTTP契約は[`api.md`](./api.md)、完成時schemaとbackfill規則は[`databas
 `USERNAME_AUTH_ENABLED=false`ではlegacy email endpointと旧serializerだけを公開し、新認証codeへ
 trafficを流しません。個別の#101 / #102 / #103をmergeしても共有環境は`false`を維持し、#118の
 maintenance windowでだけ一括して有効化します。最初のcutover成功後から#106まではproduction設定を
-明示的な`true`へ固定し、
-欠落または`false`の通常deployを失敗させます。#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
+明示的な`true`へ固定し、欠落または`false`の通常deployを失敗させます。#107を単独で実行すると、
+gate falseのlegacy registerが作る新認証3列NULLの行は最終`GET /auth/me` responseへ変換できません。
+#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
 途中commitをproductionへdeployしません。#106まで含む一つの互換削除maintenance releaseで、legacy
 login / me / users / register、旧列access、最後のfalse branch、config、testを同時に削除します。
 
@@ -176,7 +177,8 @@ gate falseのemail loginは、照合後にcostを上げる場合だけ旧`passwo
 #98〜#103、#119、#120、#118と、#105〜#108、#106、#121は、通常のunit / integration testに加えて
 次を確認します。
 
-- #118の初回cutover releaseではgate falseで現行register / login / meのrequestとresponseが変わらない
+- #118の初回cutover releaseではgate falseで現行register / login / meのrequestとresponseが変わらず、
+  #105以後のlogin、#107以後のmeはgateに依存しない最終request / responseだけを使う
 - 空DB、移行直後、#98記録後に追加されたNULL行、部分適用済みDB、連続applyでcommandが冪等に動く
 - 同じdatabaseへの同時check / applyまたはapply / applyの片方がnamed lock取得に失敗し、別databaseは
   独立して実行できる。lock取得から解放まで同じconnectionを使い、解放確認失敗時はconnectionを破棄する
