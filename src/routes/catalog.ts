@@ -6,7 +6,6 @@ import {
   serializeProduct,
   serializeStore,
   serializeTransaction,
-  serializeUser,
 } from '../domain/serializers.js';
 import {
   productCategories,
@@ -16,7 +15,6 @@ import {
   type ProductTheme,
   type StoreRow,
   type TransactionRow,
-  type UserRow,
 } from '../domain/types.js';
 import { parseBody, parseQuery, Validator } from '../domain/validation.js';
 import { createProduct, deleteProduct } from '../services/products.js';
@@ -170,13 +168,6 @@ export function createCatalogRoutes(
     if (store.user_id !== c.get('user')!.user_id)
       throw new HttpError(403, 'Forbidden');
     return c.json({ data: await getStoreDashboard(db, store) });
-  });
-
-  routes.get('/users', requireAuth, async (c) => {
-    const users = await db.query<UserRow>(
-      'SELECT u.*, s.store_id AS store_id FROM users u LEFT JOIN stores s ON s.user_id = u.user_id ORDER BY u.name',
-    );
-    return c.json({ data: users.map(serializeUser) });
   });
 
   routes.get('/transactions', requireAuth, async (c) => {
