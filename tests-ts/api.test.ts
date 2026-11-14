@@ -886,12 +886,25 @@ describe('Hono API on MySQL', () => {
       points: 420,
       syncStatus: 'connected',
     });
+    await test.db.execute(
+      `INSERT INTO products
+        (product_id, store_id, user_id, name, description, price, stock,
+         status, category, theme, emoji, deleted_at, created_at, updated_at)
+       VALUES ('dashboard-deleted', 'store-mine', 'user-seller',
+               '削除済み商品', '', 1000, 1, 'available', 'hobby', 'forest',
+               '📦', UTC_TIMESTAMP(6), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`,
+    );
     const dashboard = await body(
       await seller.request('/api/v1/stores/store-mine/dashboard'),
     );
     expect(dashboard.data.store).toEqual(store.data);
     expect(dashboard.data.products).toHaveLength(3);
     expect(dashboard.data.products[0].id).toBe('product-hoodie');
+    expect(
+      dashboard.data.products.every(
+        (product: Record<string, unknown>) => !('stock' in product),
+      ),
+    ).toBe(true);
     expect(dashboard.data.stats).toEqual({
       productCount: 3,
       availableProductCount: 1,

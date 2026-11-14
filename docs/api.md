@@ -1137,8 +1137,9 @@ WebとMinecraftが別の`requestId`で同じ商品を同時購入しても、成
 
 Dashboardの`products`にも共通の一点物Productを返します。集計field自体は現行互換で残しますが、
 `availableProductCount`と`soldOutProductCount`は`status`で判定します。移行中の`totalStock`は
-一点物の購入可能数、つまり`availableProductCount`と同じ値です。Dashboard内部の集計が`status`へ
-移るまでは、DBの互換`stock`を0 / 1へ同期します。
+一点物の購入可能数、つまり`availableProductCount`と同じ値です。Dashboard内部の集計は`status`基準へ
+移行済みで、soft delete済み商品を配列と集計の両方から除外します。`totalStock`は既存Frontendとの
+互換fieldとして残し、廃止はFrontendの参照をなくす別のAPI契約変更で行います。
 
 ```http
 GET /api/v1/stores/store-mine
