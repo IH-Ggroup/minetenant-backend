@@ -88,13 +88,11 @@ export interface TransactionRow {
 }
 
 export interface CreateProductInput {
-  storeId: string;
+  requestId: string;
   sellerId: string;
   name: string;
   description: string;
   price: number;
-  /** @deprecated Dual-write in #52, then remove after the #93 cutover. */
-  stock: number;
   category: ProductCategory;
   theme: ProductTheme;
   emoji: string;

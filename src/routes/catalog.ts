@@ -57,25 +57,37 @@ export function createCatalogRoutes(
 
   routes.post('/products', requireAuth, async (c) => {
     const user = c.get('user')!;
-    const data = await parseBody(c.req.raw);
-    if (!Object.hasOwn(data, 'sellerId')) data.sellerId = user.user_id;
-    if (!Object.hasOwn(data, 'storeId')) {
-      const [store] = await db.query<{ store_id: string }>(
-        'SELECT store_id FROM stores WHERE user_id = ?',
-        [user.user_id],
-      );
-      data.storeId = store?.store_id ?? null;
+    const data = await parseBody(c.req.raw, {
+      preserveStrings: ['requestId'],
+    });
+    for (const field of ['name', 'description', 'category', 'theme', 'emoji']) {
+      if (typeof data[field] === 'string')
+        data[field] = data[field].normalize('NFC');
     }
     const validator = new Validator(data);
-    const storeId = validator.string('storeId', {
+    const allowedFields = new Set([
+      'requestId',
+      'name',
+      'description',
+      'price',
+      'category',
+      'theme',
+      'emoji',
+    ]);
+    for (const field of Object.keys(data)) {
+      if (!allowedFields.has(field))
+        validator.add(field, 'この項目は指定できません。');
+    }
+    const requestId = validator.string('requestId', {
       required: true,
-      messages: { required: '出品する店舗を指定してください。' },
+      max: 100,
+      messages: {
+        required: '出品リクエストIDを指定してください。',
+        max: '出品リクエストIDは100文字以内で指定してください。',
+      },
     });
-    const sellerId = validator.string('sellerId', {
-      required: true,
-      in: [user.user_id],
-      messages: { required: '出品者を指定してください。' },
-    });
+    if (requestId !== undefined && !/^[A-Za-z0-9._:-]{1,100}$/.test(requestId))
+      validator.add('requestId', '出品リクエストIDの形式が正しくありません。');
     const name = validator.string('name', {
       required: true,
       max: 120,
@@ -90,21 +102,11 @@ export function createCatalogRoutes(
       required: true,
       min: 1,
       max: 99_999_999,
+      strictNumber: true,
       messages: {
         required: '価格を入力してください。',
         integer: '価格は整数で入力してください。',
         min: '価格は1円以上で入力してください。',
-      },
-    });
-    const stock = validator.integer('stock', {
-      required: true,
-      min: 1,
-      max: 1,
-      messages: {
-        required: '在庫数を入力してください。',
-        integer: '在庫数は整数で入力してください。',
-        min: '一点物のため在庫数は1を指定してください。',
-        max: '一点物のため在庫数は1を指定してください。',
       },
     });
     const category = validator.string('category', {
@@ -122,26 +124,21 @@ export function createCatalogRoutes(
       max: 16,
       messages: { required: '商品を表す絵文字を指定してください。' },
     });
-    if (storeId !== undefined) {
-      const [store] = await db.query<{ store_id: string }>(
-        'SELECT store_id FROM stores WHERE store_id = ?',
-        [storeId],
-      );
-      if (!store) validator.add('storeId', '指定された店舗が見つかりません。');
-    }
     validator.throwIfInvalid();
-    const product = await createProduct(db, {
-      storeId: storeId!,
-      sellerId: sellerId!,
+    const result = await createProduct(db, {
+      requestId: requestId!,
+      sellerId: user.user_id,
       name: name!,
       description: description!,
       price: price!,
-      stock: stock!,
       category: category as ProductCategory,
       theme: theme as ProductTheme,
       emoji: emoji!,
     });
-    return c.json({ data: serializeProduct(product) }, 201);
+    return c.json(
+      { data: serializeProduct(result.product) },
+      result.created ? 201 : 200,
+    );
   });
 
   routes.delete('/products/:product', requireAuth, async (c) => {
