@@ -3,6 +3,7 @@ import type { Database, SqlExecutor } from '../db.js';
 import {
   notFound,
   outOfStock,
+  productNotFound,
   requestIdConflict,
   selfPurchase,
 } from '../domain/errors.js';
@@ -56,7 +57,7 @@ export async function purchase(
         'SELECT * FROM products WHERE product_id = ? FOR UPDATE',
         [input.productId],
       );
-      if (!product) notFound();
+      if (!product || product.deleted_at !== null) productNotFound();
 
       // A competing retry may have committed while this request waited for the
       // product lock. Replay it before deciding the last item is sold out.
@@ -67,7 +68,7 @@ export async function purchase(
       }
 
       if (product.user_id === input.buyerId) selfPurchase();
-      if (Number(product.stock) < 1) outOfStock();
+      if (product.status !== 'available') outOfStock();
 
       const [store] = await tx.query<StoreRow>(
         'SELECT * FROM stores WHERE store_id = ? FOR UPDATE',
@@ -76,7 +77,9 @@ export async function purchase(
       if (!store) notFound();
 
       await tx.execute(
-        'UPDATE products SET stock = stock - 1, updated_at = UTC_TIMESTAMP() WHERE product_id = ?',
+        `UPDATE products
+          SET status = 'sold', stock = 0, updated_at = UTC_TIMESTAMP()
+          WHERE product_id = ?`,
         [product.product_id],
       );
       const transactionId = randomUUID();

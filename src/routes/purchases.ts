@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
-import { notFound } from '../domain/errors.js';
+import { productNotFound } from '../domain/errors.js';
 import {
   serializeProduct,
   serializeTransaction,
@@ -21,10 +21,11 @@ export function createPurchaseRoutes(
   const webPurchase = async (c: Context<AppEnv>, routeProductId?: string) => {
     if (routeProductId !== undefined) {
       const [product] = await db.query<{ product_id: string }>(
-        'SELECT product_id FROM products WHERE product_id = ?',
+        `SELECT product_id FROM products
+          WHERE product_id = ? AND deleted_at IS NULL`,
         [routeProductId],
       );
-      if (!product) notFound();
+      if (!product) productNotFound();
       routeProductId = product.product_id;
     }
     const userId = c.get('user')!.user_id;
@@ -57,14 +58,6 @@ export function createPurchaseRoutes(
         max: '購入リクエストIDは100文字以内で指定してください。',
       },
     });
-    if (productId !== undefined) {
-      const [product] = await db.query<{ product_id: string }>(
-        'SELECT product_id FROM products WHERE product_id = ?',
-        [productId],
-      );
-      if (!product)
-        validator.add('productId', 'The selected product id is invalid.');
-    }
     validator.throwIfInvalid();
     const result = await purchase(
       db,
@@ -111,14 +104,6 @@ export function createPurchaseRoutes(
       },
     });
     validator.prohibited('source', 'Minecraft購入では購入元を指定できません。');
-    if (productId !== undefined) {
-      const [product] = await db.query<{ product_id: string }>(
-        'SELECT product_id FROM products WHERE product_id = ?',
-        [productId],
-      );
-      if (!product)
-        validator.add('productId', '指定された商品が見つかりません。');
-    }
     if (buyerId !== undefined) {
       const [buyer] = await db.query<{ user_id: string }>(
         'SELECT user_id FROM users WHERE user_id = ?',
