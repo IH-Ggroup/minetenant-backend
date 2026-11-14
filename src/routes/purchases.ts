@@ -6,8 +6,8 @@ import {
   serializeProduct,
   serializeTransaction,
 } from '../domain/serializers.js';
-import type { ProductRow } from '../domain/types.js';
 import { parseBody, Validator } from '../domain/validation.js';
+import { listPublicProducts } from '../services/public-products.js';
 import { purchase } from '../services/purchases.js';
 import type { AppEnv } from '../types.js';
 
@@ -88,9 +88,7 @@ export function createPurchaseRoutes(
   );
 
   routes.get('/minecraft/catalog', async (c) => {
-    const products = await db.query<ProductRow>(
-      'SELECT * FROM products ORDER BY created_at DESC',
-    );
+    const products = await listPublicProducts(db);
     return c.json({ data: products.map(serializeProduct) });
   });
 
