@@ -148,14 +148,13 @@ registerも`password_hash`だけへ書き込みます。
 
 ## Rollback
 
-- 互換削除releaseの本番適用開始前に戻す場合は、全API maintenanceへ切り替えてから旧releaseへ戻す。新request行は
-  旧列互換値を持つためdata互換だが、logout済みのusername登録利用者はuser_id由来のsynthetic emailを
-  知らず、旧email loginを透過的には再開できない
-- 原則は認証maintenanceのままforward-fixする。やむを得ない場合だけoperatorが保存済みsynthetic
-  emailを安全に検索して本人へ伝え、公開DTO・通常log・運用画面へ出さない
-- 旧writerでregisterを再開した場合はNULL行やhash差分が再び増え得るため、次回は手順1から全工程を
-  再実行する
-- 互換削除releaseでtrafficを再開した後は旧auth全体へ戻さずforward-fixする
+- 互換削除releaseの起動前は、全API maintenanceを維持したまま旧releaseへ戻せる
+- #106を含むreleaseで作成した利用者は旧5列がすべてNULLであり、旧releaseとはdata互換がない
+- 新releaseの起動後に戻せるのは、外部trafficをまだ再開しておらず、確認用userと関連dataを削除して
+  旧5列NULL残件が0件であることを確認できた場合だけとする
+- 外部traffic再開後、smoke以外の#106 register write、cleanup失敗、旧5列NULL残件のいずれかがある場合は
+  旧releaseを起動せず、認証maintenanceを維持してforward-fixする
+- 旧releaseへ戻した場合は、次回の互換削除releaseで本runbookの手順1から全工程を再実行する
 
 ## 必須テストと証跡
 
