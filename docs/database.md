@@ -239,7 +239,7 @@ catch-upします。
    `UNIQUE INDEX users_username_unique (username)`を作成・verifyし、#103以後の同時登録をDBで排他する。
 2. **B-AUTH-02〜06 #99〜#103:** auth専用serializer・login・me・registerをfeature gateの後ろへ追加する。
    legacy registerは旧列と新列を同じtransactionで書き、新requestも#106までは決定済み互換値を
-   旧列へ書いて、両runtimeで読めるようにする。`GET /users`のlegacy serializerはまだ変えない。
+   旧列へ書いて、両runtimeで読めるようにする。利用者一覧のlegacy serializerは#108まで維持する。
 3. **B-AUTH-SESSION #119 / B-DB-STRICT-MODE #120:** 必要時だけ匿名sessionを作るmiddleware hardeningと、
    全runtime DB connectionのstrict SQL mode検査をcutover releaseへ含める。
 4. **B-AUTH-CUTOVER #118:** 全APIをmaintenanceへ切り替えて旧instanceをdrain・停止し、上記commandの
@@ -249,7 +249,7 @@ catch-upします。
    自分のusernameを確認できるまでemail loginを外さない。本番cutoverでdemo seedは実行しない。
 6. **B-AUTH-08 / 10 #105 / #107:** login / meのlegacy branchとloginの旧`password` read / writeを
    削除してmergeするが、単独ではproduction deployしない。
-7. **B-AUTH-11 #108:** 利用者列挙を避けるため`GET /users`と参照・test・docsを削除してmergeする。
+7. **B-AUTH-11 #108:** 利用者列挙を避けるため一覧routeと参照・test・docsを削除してmergeする。
    残るruntime旧列accessがregister互換だけであることを確認し、単独ではproduction deployしない。
 8. **B-AUTH-09 #106:** #108完了後にregisterの旧入力・旧列write、残ったregister false branch、feature
    gateを最後に削除してmergeするが、単独ではproduction deployしない。

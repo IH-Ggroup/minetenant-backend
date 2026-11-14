@@ -6,7 +6,6 @@ import type {
   StoreRow,
   Timestamp,
   TransactionRow,
-  UserRow,
 } from './types.js';
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, {
@@ -90,17 +89,6 @@ export function serializeTransaction(transaction: TransactionRow) {
     amount: Number(transaction.amount),
     status: transaction.status,
     createdAt: serializeTimestamp(transaction.created_at),
-  };
-}
-
-export function serializeUser(user: UserRow) {
-  return {
-    id: user.user_id,
-    name: user.name,
-    role: user.role,
-    roleLabel: user.role_label,
-    avatarInitial: user.avatar_initial,
-    storeId: user.store_id ?? null,
   };
 }
 
