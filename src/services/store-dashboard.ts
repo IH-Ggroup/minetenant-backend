@@ -10,7 +10,9 @@ import { growthProgress } from './store-growth.js';
 export async function getStoreDashboard(db: Database, store: StoreRow) {
   const [products, transactions] = await Promise.all([
     db.query<ProductRow>(
-      'SELECT * FROM products WHERE store_id = ? ORDER BY created_at DESC',
+      `SELECT * FROM products
+        WHERE store_id = ? AND deleted_at IS NULL
+        ORDER BY created_at DESC`,
       [store.store_id],
     ),
     db.query<TransactionRow>(
@@ -18,21 +20,19 @@ export async function getStoreDashboard(db: Database, store: StoreRow) {
       [store.user_id],
     ),
   ]);
+  const availableProductCount = products.filter(
+    (product) => product.status === 'available',
+  ).length;
   return {
     store: serializeStore(store),
     products: products.map(serializeProduct),
     stats: {
       productCount: products.length,
-      availableProductCount: products.filter(
-        (product) => Number(product.stock) > 0,
-      ).length,
+      availableProductCount,
       soldOutProductCount: products.filter(
-        (product) => Number(product.stock) === 0,
+        (product) => product.status === 'sold',
       ).length,
-      totalStock: products.reduce(
-        (total, product) => total + Number(product.stock),
-        0,
-      ),
+      totalStock: availableProductCount,
       salesCount: transactions.length,
       salesAmount: transactions.reduce(
         (total, transaction) => total + Number(transaction.amount),
