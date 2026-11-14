@@ -77,8 +77,8 @@ B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
 | 409    | `OUT_OF_STOCK`            | `status='sold'`（legacyの`stock=0`を含む）         |
 | 422    | `SELF_PURCHASE`           | 出品者本人が自分の商品を購入                       |
 
-入力不正は現行どおり422の`{ "message", "errors" }`、存在しない商品は404の
-`{ "message": "商品が見つかりません。" }`です。上表のエラーは`message`と`code`を必ず返し、
+入力不正は現行どおり422の`{ "message", "errors" }`です。商品詳細GETで存在しない商品を指定した
+場合は404の`{ "message": "商品が見つかりません。" }`です。上表のエラーは`message`と`code`を必ず返し、
 `REQUEST_ID_CONFLICT`と`SELF_PURCHASE`には該当入力の`errors`も返します。
 
 ## 店舗ポイント
@@ -1168,8 +1168,9 @@ WebとMinecraftが別の`requestId`で同じ商品を同時購入しても、成
 
 Dashboardの`products`にも共通の一点物Productを返します。集計field自体は現行互換で残しますが、
 `availableProductCount`と`soldOutProductCount`は`status`で判定します。移行中の`totalStock`は
-一点物の購入可能数、つまり`availableProductCount`と同じ値です。Dashboard内部の集計が`status`へ
-移るまでは、DBの互換`stock`を0 / 1へ同期します。
+一点物の購入可能数、つまり`availableProductCount`と同じ値です。Dashboard内部の集計は`status`基準へ
+移行済みで、soft delete済み商品を配列と集計の両方から除外します。`totalStock`は既存Frontendとの
+互換fieldとして残し、廃止はFrontendの参照をなくす別のAPI契約変更で行います。
 
 ```http
 GET /api/v1/stores/store-mine

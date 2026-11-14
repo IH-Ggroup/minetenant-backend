@@ -5,13 +5,14 @@ import {
   serializeTransaction,
 } from '../domain/serializers.js';
 import type { ProductRow, StoreRow, TransactionRow } from '../domain/types.js';
+import { publicProductPredicates } from './public-products.js';
 import { growthProgress } from './store-growth.js';
 
 export async function getStoreDashboard(db: Database, store: StoreRow) {
   const [products, transactions] = await Promise.all([
     db.query<ProductRow>(
       `SELECT * FROM products
-        WHERE store_id = ? AND deleted_at IS NULL
+        WHERE store_id = ? AND ${publicProductPredicates.join(' AND ')}
         ORDER BY created_at DESC`,
       [store.store_id],
     ),
