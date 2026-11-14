@@ -544,6 +544,13 @@ describe('Hono API on MySQL', () => {
       await buyer.json('/api/v1/products/product-hoodie', 'DELETE'),
       403,
     );
+    await test.db.execute(
+      `UPDATE products
+        SET listing_request_id = 'delete-request',
+            listing_request_fingerprint = ?
+        WHERE product_id = 'product-hoodie'`,
+      ['a'.repeat(64)],
+    );
     const deleted = await seller.json(
       '/api/v1/products/product-hoodie',
       'DELETE',
@@ -557,6 +564,26 @@ describe('Hono API on MySQL', () => {
     expect(
       (await body(await guest.request('/api/v1/products'))).data,
     ).toHaveLength(5);
+    expect(
+      (await body(await guest.request('/api/v1/minecraft/catalog'))).data,
+    ).toHaveLength(5);
+    const [tombstone] = await test.db.query<{
+      deleted_at: Date | string | null;
+      listing_request_id: string | null;
+      listing_request_fingerprint: string | null;
+    }>(
+      `SELECT deleted_at, listing_request_id, listing_request_fingerprint
+        FROM products WHERE product_id = 'product-hoodie'`,
+    );
+    expect(tombstone).toMatchObject({
+      listing_request_id: 'delete-request',
+      listing_request_fingerprint: 'a'.repeat(64),
+    });
+    expect(tombstone?.deleted_at).not.toBeNull();
+    await expectStatus(
+      await seller.json('/api/v1/products/product-hoodie', 'DELETE'),
+      404,
+    );
     await expectStatus(
       await seller.json('/api/v1/products/missing', 'DELETE'),
       404,
@@ -568,9 +595,13 @@ describe('Hono API on MySQL', () => {
       await seller.json('/api/v1/products/product-stool', 'DELETE'),
       409,
     );
-    expect(result.message).toBe(
-      'Products with transaction history cannot be deleted.',
-    );
+    expect(result).toEqual({ message: '売却済みの商品は削除できません。' });
+    expect(
+      await body(
+        await seller.json('/api/v1/products/product-notebook', 'DELETE'),
+        409,
+      ),
+    ).toEqual({ message: '売却済みの商品は削除できません。' });
     expect(
       (await body(await guest.request('/api/v1/products/product-stool'))).data
         .status,

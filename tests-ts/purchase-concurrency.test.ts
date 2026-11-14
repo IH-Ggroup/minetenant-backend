@@ -271,9 +271,18 @@ describe('atomic MySQL purchases and deletion races', () => {
       expect(await points('store-mine')).toBe(520);
     } else {
       await expectStatus(deleted, 204);
-      // A missing product is 422 during Minecraft input validation or 404 after row locking.
-      expect([404, 422]).toContain(bought.status);
-      expect(await productState('product-hoodie')).toBeUndefined();
+      await expectStatus(bought, 404);
+      expect(await productState('product-hoodie')).toEqual({
+        stock: 1,
+        status: 'available',
+      });
+      const [product] = await test.db.query<{
+        deleted_at: Date | string | null;
+      }>(
+        `SELECT deleted_at FROM products
+          WHERE product_id = 'product-hoodie'`,
+      );
+      expect(product?.deleted_at).not.toBeNull();
       expect(history).toHaveLength(0);
       expect(await points('store-mine')).toBe(420);
     }
