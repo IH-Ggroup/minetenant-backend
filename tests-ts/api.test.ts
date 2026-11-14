@@ -8,10 +8,10 @@ import {
 } from './helpers.js';
 
 const productPayload = {
+  requestId: 'api-listing-request',
   name: 'テスト用ツールセット',
   description: 'APIの出品フローを確認するための商品です。',
   price: 2500,
-  stock: 1,
   category: 'tool',
   theme: 'moss',
   emoji: '🧰',
@@ -319,15 +319,16 @@ describe('Hono API on MySQL', () => {
   });
 
   it('treats SQL wildcards, the escape character and quotes as literal search text', async () => {
-    for (const [name, keyword] of [
+    for (const [index, [name, keyword]] of [
       ['100% cotton', '%'],
       ['tool_bag', '_'],
       ['hello!', '!'],
       ["O'Reilly book", "O'Reilly"],
-    ]) {
+    ].entries()) {
       const created = await body(
         await seller.json('/api/v1/products', 'POST', {
           ...productPayload,
+          requestId: `wildcard-listing-${index}`,
           name,
         }),
         201,
@@ -389,29 +390,25 @@ describe('Hono API on MySQL', () => {
     expect(listed.data[0].id).toBe(created.data.id);
   });
 
-  it('accepts explicit owner IDs and a signed one-item stock string', async () => {
+  it('rejects client-provided ownership, state and quantity fields even when empty', async () => {
     const result = await body(
       await seller.json('/api/v1/products', 'POST', {
         ...productPayload,
-        storeId: 'store-mine',
-        sellerId: 'user-seller',
-        price: '2500',
-        stock: '+1',
+        storeId: '',
+        sellerId: null,
+        status: 'available',
+        stock: 1,
       }),
-      201,
+      422,
     );
-    expect(result.data).toMatchObject({
-      price: 2500,
-      status: 'available',
-      storeId: 'store-mine',
-      sellerId: 'user-seller',
-    });
-    expect(result.data).not.toHaveProperty('stock');
+    for (const field of ['storeId', 'sellerId', 'status', 'stock'])
+      expect(result.errors).toHaveProperty(field);
   });
 
   it('rejects invalid listing fields together without storing anything', async () => {
     const result = await body(
       await seller.json('/api/v1/products', 'POST', {
+        requestId: '',
         storeId: '',
         sellerId: '',
         name: '',
@@ -426,6 +423,7 @@ describe('Hono API on MySQL', () => {
     );
     expect(Object.keys(result.errors).sort()).toEqual(
       [
+        'requestId',
         'storeId',
         'sellerId',
         'name',
@@ -449,7 +447,7 @@ describe('Hono API on MySQL', () => {
       description: '文'.repeat(2000),
       emoji: '🧰'.repeat(16),
       price: 99999999,
-      stock: 1,
+      requestId: 'listing-field-maximums',
     };
     await expectStatus(
       await seller.json('/api/v1/products', 'POST', valid),
@@ -457,6 +455,7 @@ describe('Hono API on MySQL', () => {
     );
     const invalid = {
       ...valid,
+      requestId: 'a'.repeat(101),
       name: 'あ'.repeat(121),
       description: '文'.repeat(2001),
       emoji: '🧰'.repeat(17),
@@ -467,7 +466,14 @@ describe('Hono API on MySQL', () => {
       await seller.json('/api/v1/products', 'POST', invalid),
       422,
     );
-    for (const field of ['name', 'description', 'emoji', 'price', 'stock'])
+    for (const field of [
+      'requestId',
+      'name',
+      'description',
+      'emoji',
+      'price',
+      'stock',
+    ])
       expect(result.errors).toHaveProperty(field);
   });
 
@@ -488,26 +494,46 @@ describe('Hono API on MySQL', () => {
     },
   );
 
-  it('rejects another seller identity or another store even when omitted identity is valid', async () => {
-    const forged = await body(
-      await buyer.json('/api/v1/products', 'POST', {
+  it('requires a JSON integer price and preserves requestId bytes while normalizing listing text', async () => {
+    for (const price of ['2500', true]) {
+      const invalid = await body(
+        await seller.json('/api/v1/products', 'POST', {
+          ...productPayload,
+          price,
+        }),
+        422,
+      );
+      expect(invalid.errors).toHaveProperty('price');
+    }
+    const invalidRequest = await body(
+      await seller.json('/api/v1/products', 'POST', {
         ...productPayload,
-        sellerId: 'user-seller',
-        storeId: 'store-mine',
+        requestId: ' listing-with-spaces ',
       }),
       422,
     );
-    expect(forged.errors).toHaveProperty('sellerId');
-    await expectStatus(
-      await buyer.json('/api/v1/products', 'POST', {
+    expect(invalidRequest.errors).toHaveProperty('requestId');
+    const created = await body(
+      await seller.json('/api/v1/products', 'POST', {
         ...productPayload,
-        storeId: 'store-mine',
+        requestId: 'normalized-listing',
+        name: '  Cafe\u0301  ',
       }),
-      422,
+      201,
     );
+    expect(created.data.name).toBe('Café');
+    expect(
+      await body(
+        await seller.json('/api/v1/products', 'POST', {
+          ...productPayload,
+          requestId: 'normalized-listing',
+          name: 'Café',
+        }),
+      ),
+    ).toEqual(created);
     expect(
       (await body(await guest.request('/api/v1/products'))).data,
-    ).toHaveLength(6);
+    ).toHaveLength(7);
   });
 
   it('requires login on every private web route with JSON responses', async () => {
