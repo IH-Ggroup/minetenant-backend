@@ -756,14 +756,23 @@ describe('Hono API on MySQL', () => {
     );
     expect(forged.errors).toHaveProperty('buyerId');
     expect(forged.errors).toHaveProperty('source');
-    const missing = await body(
+    expect(
+      await body(
+        await buyer.json('/api/v1/purchases', 'POST', {
+          productId: 'missing',
+          requestId: 'missing',
+        }),
+        404,
+      ),
+    ).toEqual({ message: '商品が見つかりません。' });
+    const invalidProductId = await body(
       await buyer.json('/api/v1/purchases', 'POST', {
-        productId: 'missing',
-        requestId: 'missing',
+        productId: {},
+        requestId: 'invalid-product-id',
       }),
       422,
     );
-    expect(missing.errors).toHaveProperty('productId');
+    expect(invalidProductId.errors).toHaveProperty('productId');
     const mismatch = await body(
       await buyer.json('/api/v1/products/product-stool/purchases', 'POST', {
         productId: 'product-hoodie',
@@ -824,7 +833,7 @@ describe('Hono API on MySQL', () => {
     expect(wrongSource.errors).toHaveProperty('source');
     const invalid = await body(
       await guest.json('/api/v1/minecraft/purchases', 'POST', {
-        productId: 'missing',
+        productId: {},
         buyerId: 'missing',
         requestId: '',
       }),
