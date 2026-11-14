@@ -984,8 +984,8 @@ describe('Hono API on MySQL', () => {
     await expectStatus(await guest.request('/api/v1/auth/csrf-cookie'), 204);
     await expectStatus(
       await guest.json('/api/v1/auth/register', 'POST', {
-        name: 'Other User',
-        email: 'other@example.test',
+        username: 'other_user',
+        displayName: 'Other User',
         password: 'password-123',
       }),
       201,
