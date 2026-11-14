@@ -4,7 +4,7 @@ import { getCookie, setCookie } from 'hono/cookie';
 import type { AppConfig } from './config.js';
 import type { Database, SqlExecutor } from './db.js';
 import { HttpError } from './domain/errors.js';
-import type { AuthenticatedUserRow, SessionUserRow } from './domain/types.js';
+import type { SessionUserRow } from './domain/types.js';
 import { parseBody } from './domain/validation.js';
 import type { AppEnv } from './types.js';
 
@@ -32,31 +32,19 @@ class SessionRotationConflictError extends HttpError {
 const SESSION_BOOTSTRAP_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 
-const AUTH_USER_LOOKUP_COLUMNS = {
-  user_id: 'users.user_id',
-  username: 'users.username',
-  email: 'users.email',
-} as const;
-
-export type AuthUserIdentifier = keyof typeof AUTH_USER_LOOKUP_COLUMNS;
-
-/** Load the single authenticated-user projection used by login and sessions. */
-export async function findAuthenticatedUser(
+/** Load only the final authentication columns used by browser sessions. */
+async function findSessionUser(
   db: Database,
-  identifier: AuthUserIdentifier,
-  value: string,
-): Promise<AuthenticatedUserRow | undefined> {
-  const column = AUTH_USER_LOOKUP_COLUMNS[identifier];
-  const [user] = await db.query<AuthenticatedUserRow>(
+  userId: string,
+): Promise<SessionUserRow | undefined> {
+  const [user] = await db.query<SessionUserRow>(
     `SELECT users.user_id, users.username, users.display_name,
-            users.password_hash, users.name, users.email, users.password,
-            users.role, users.role_label, users.avatar_initial,
-            stores.store_id AS store_id
+            users.password_hash, users.role, stores.store_id AS store_id
        FROM users
        LEFT JOIN stores ON stores.user_id = users.user_id
-      WHERE ${column} = ?
+      WHERE users.user_id = ?
       LIMIT 1`,
-    [value],
+    [userId],
   );
   return user;
 }
@@ -218,7 +206,7 @@ export function sessionMiddleware(
     }
     c.set('session', session);
     const user = session?.userId
-      ? await findAuthenticatedUser(db, 'user_id', session.userId)
+      ? await findSessionUser(db, session.userId)
       : undefined;
     c.set('user', user);
 

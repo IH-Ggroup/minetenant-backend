@@ -486,7 +486,6 @@ describe('Hono API on MySQL', () => {
     await expectStatus(await guest.request('/api/v1/auth/csrf-cookie'), 204);
     for (const path of [
       '/auth/me',
-      '/users',
       '/transactions',
       '/transactions/transaction-demo',
       '/stores/store-mine/dashboard',
@@ -1004,28 +1003,11 @@ describe('Hono API on MySQL', () => {
     );
   });
 
-  it('exposes only public user fields and includes their owned stores', async () => {
-    const { data } = await body(await buyer.request('/api/v1/users'));
-    expect(data).toHaveLength(2);
-    expect(data).toEqual(
-      expect.arrayContaining([
-        {
-          id: 'user-buyer',
-          name: '山田 みどり',
-          role: 'buyer',
-          roleLabel: '購入者デモ',
-          avatarInitial: '山',
-          storeId: 'store-yamada',
-        },
-        {
-          id: 'user-seller',
-          name: '青鉱舎 店長',
-          role: 'seller',
-          roleLabel: '出品者デモ',
-          avatarInitial: 'M',
-          storeId: 'store-mine',
-        },
-      ]),
-    );
+  it('returns 404 for the removed user directory with or without authentication', async () => {
+    for (const target of [guest, buyer]) {
+      const response = await target.request('/api/v1/users');
+      await expectStatus(response, 404);
+      expect(await response.json()).toEqual({ message: 'Not found.' });
+    }
   });
 });

@@ -21,8 +21,8 @@ import {
   parseRegisterCredentials,
 } from '../domain/auth-credentials.js';
 import { HttpError, ValidationError } from '../domain/errors.js';
-import { serializeSessionUser, serializeUser } from '../domain/serializers.js';
-import type { AuthenticatedUserRow } from '../domain/types.js';
+import { serializeSessionUser } from '../domain/serializers.js';
+import type { SessionUserRow } from '../domain/types.js';
 import {
   assertRegistrationIdentifierAvailable,
   createRegistration,
@@ -45,6 +45,26 @@ const invalidCredentialsMessage =
 
 interface PasswordHashColumn {
   password_hash: string | null;
+}
+
+interface LegacyRegistrationUser extends SessionUserRow {
+  name: string;
+  email: string;
+  password: string;
+  role_label: string;
+  avatar_initial: string;
+  store_id: string;
+}
+
+function serializeLegacyRegistrationUser(user: LegacyRegistrationUser) {
+  return {
+    id: user.user_id,
+    name: user.name,
+    role: user.role,
+    roleLabel: user.role_label,
+    avatarInitial: user.avatar_initial,
+    storeId: user.store_id,
+  };
 }
 
 function normalizeEmail(value: string): string {
@@ -344,7 +364,7 @@ export function createAuthRoutes(
     const passwordHash = await bcrypt.hash(password, config.bcryptRounds);
     const userId = randomUUID();
     const storeId = randomUUID();
-    const user: AuthenticatedUserRow = {
+    const user: LegacyRegistrationUser = {
       user_id: userId,
       username: null,
       display_name: null,
@@ -395,7 +415,7 @@ export function createAuthRoutes(
     }
     await rotateSession(c, db, config, userId);
     c.set('user', user);
-    return c.json({ data: serializeUser(user) }, 201);
+    return c.json({ data: serializeLegacyRegistrationUser(user) }, 201);
   });
 
   routes.post('/login', async (c) => {
