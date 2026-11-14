@@ -264,13 +264,14 @@ function analyzeRows(rowsInput: readonly AuthUserRow[]): Analysis {
       }
     }
 
-    if (
-      row.name === null ||
-      row.email === null ||
-      row.password === null ||
-      row.roleLabel === null ||
-      row.avatarInitial === null
-    ) {
+    const legacyNullCount = [
+      row.name,
+      row.email,
+      row.password,
+      row.roleLabel,
+      row.avatarInitial,
+    ].filter((value) => value === null).length;
+    if (legacyNullCount > 0 && legacyNullCount < 5) {
       addViolation(row.userId, 'LEGACY_COMPATIBILITY_INCOMPLETE');
     }
     if (row.role !== 'buyer' && row.role !== 'seller') {
@@ -298,10 +299,14 @@ function analyzeRows(rowsInput: readonly AuthUserRow[]): Analysis {
     }
 
     let passwordHash = row.passwordHash ?? undefined;
-    if (row.password === null || !isValidPasswordHash(row.password)) {
+    if (
+      row.password === null
+        ? row.passwordHash === null
+        : !isValidPasswordHash(row.password)
+    ) {
       addViolation(row.userId, 'PASSWORD_HASH_INVALID');
     } else if (passwordHash === undefined) {
-      passwordHash = row.password;
+      passwordHash = row.password ?? undefined;
     }
     if (passwordHash !== undefined && !isValidPasswordHash(passwordHash)) {
       addViolation(row.userId, 'PASSWORD_HASH_INVALID');

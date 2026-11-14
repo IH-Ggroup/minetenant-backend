@@ -11,10 +11,7 @@ camelCaseで返します。
 > Product responseは`status`へ移行しました。一方、出品・購入writerは物理`stock`との互換期間中で、
 > 店舗pointsも販売店舗だけへ加算するため、後続Issue完了までは一部の動作が異なります。
 >
-> 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。段階移行中は
-> `USERNAME_AUTH_ENABLED=false`でemail / `name`の互換経路と旧serializerだけを公開し、
-> `true`では実装済みendpointのusername経路と期限付きのlegacy互換を使います。共有環境は
-> B-AUTH-CUTOVER #118まで`false`を維持します。B-AUTH-01〜12、B-AUTH-SESSION #119、
+> 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。B-AUTH-01〜12、B-AUTH-SESSION #119、
 > B-DB-STRICT-MODE #120、B-AUTH-CONTRACT-CUTOVER #121、Frontend F-AUTH-01の段階移行中は、
 > この節の「移行順と互換期間」も参照してください。取引履歴とFabric APIの認証・pathは
 > 現行実装の説明です。ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
@@ -219,9 +216,8 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 
 ## 認証とCSRF
 
-この節の「完成時契約」はB-CONTRACT-07の正本です。段階移行中の実際の経路は
-`USERNAME_AUTH_ENABLED`と各endpointの実装状況で決まるため、末尾の「移行順と互換期間」も
-参照してください。共有環境では#118のcutoverまで`false`を維持します。
+この節はB-CONTRACT-07の正本です。運用上の公開順は末尾の「移行順と互換期間」も
+参照してください。
 
 ### 完成時のSessionとCSRF
 
@@ -537,10 +533,9 @@ routeへ到達した成功・401・422の試行をどちらも消費します。
 消費しません。一方のbucketですでに拒否されたrequestは、もう一方の残数を消費しません。
 usernameがstringなら形式不正でもtrimしてASCII `A-Z`だけを小文字化し、欠落またはstring以外なら
 空identifierを作ります。
-loginのcanonical account keyは`username:<normalized username>`、username欠落またはstring以外は
-`empty`です。未登録usernameも同じkeyを使います。legacy registerだけは#106まで、既存emailなら
-保存済みusernameへ写像し、未知emailなら`email:<normalized email>`を使います。#105でloginのemail
-alias lookupは削除済みで、email loginを試してもaccount解決queryを行いません。
+loginとregisterのcanonical account keyは`username:<normalized username>`、username欠落または
+string以外は`empty`です。未登録usernameも同じkeyを使います。email入力でもaccount解決queryを
+行いません。
 
 account解決queryの前にIP bucketがblock済みかを確認し、block済みならalias lookupもaccount bucketの
 更新も行いません。未blockならaliasを解決した後、一つのtransactionでIP bucketを再checkして両bucketを
@@ -548,8 +543,8 @@ lockします。どちらかが上限なら両方とも増やさず、両方に�
 永続的なaccount lock、`423 Locked`、unlock APIは設けません。429はform-levelで表示し、
 フロントは`Retry-After`が示すwindow終了まで再送を抑止します。
 
-rate-limit keyにはpasswordを絶対に含めません。canonical username、legacy registerでだけ使う
-type prefix付きの未知email、emptyのいずれかとIPを組み立てたbucket keyはSHA-256にしてからDBへ保存し、
+rate-limit keyにはpasswordを絶対に含めません。canonical usernameまたはemptyとIPを組み立てた
+bucket keyはSHA-256にしてからDBへ保存し、
 生値をDBやlogへ残しません。通常responseには現在の最も厳しいbucketの
 `X-RateLimit-Limit`と`X-RateLimit-Remaining`を返します。429にはさらに秒数の`Retry-After`と
 Unix秒の`X-RateLimit-Reset`を返します。
@@ -562,9 +557,7 @@ Unix秒の`X-RateLimit-Reset`を返します。
 }
 ```
 
-### `USERNAME_AUTH_ENABLED=false`の互換runtime
-
-以下はgateを無効にした環境の接続確認用で、完成時の公開契約ではありません。
+### 認証runtime
 
 最初に`GET /api/v1/auth/csrf-cookie`を`credentials: 'include'`付きで呼びます。
 ブラウザへセッションCookieと`XSRF-TOKEN` Cookieが設定されます。
@@ -579,32 +572,7 @@ CSRFトークンを固定の変数へ保存せず、書き込みのたびにCook
 `$2b$`・`$2y$`のどちらも照合できます。`XSRF-TOKEN` Cookieと
 `X-XSRF-TOKEN`ヘッダーを組み合わせてCSRFを検証します。
 
-#### legacy新規登録
-
-```http
-POST /api/v1/auth/register
-Content-Type: application/json
-X-XSRF-TOKEN: CookieをURLデコードした値
-```
-
-```json
-{
-  "name": "山田 みどり",
-  "email": "new-user@example.test",
-  "password": "demo-password-123",
-  "password_confirmation": "demo-password-123"
-}
-```
-
-`name`は必須で120文字以内、`email`は必須で255文字以内・重複不可です。
-メールアドレスは前後の空白を除き、小文字にして扱います。パスワードは8文字以上・
-72バイト以内です。`password_confirmation`は省略できますが、送る場合は一致が必要です。
-
-成功時はユーザーと、その人が所有する店舗を同時に作り、ログイン状態で
-`201 Created`と`data: User`を返します。店舗は`level: 1`、0 points、`offline`から
-始まります。登録ユーザーの`role`は`buyer`ですが、自分の店舗に出品できます。
-
-#### usernameログイン・legacy状態復元・ログアウト
+#### usernameログイン・状態復元・ログアウト
 
 ```http
 POST /api/v1/auth/login
@@ -619,8 +587,8 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
-ログインはgateにかかわらずusername方式だけを受け付け、完成時の7 fieldを返します。email入力は
-422 `errors.email`です。`GET /auth/me`もgateにかかわらず同じ7 fieldを返し、401なら未ログインです。
+ログインはusername方式だけを受け付け、7 fieldのUserを返します。email入力は
+422 `errors.email`です。`GET /auth/me`も同じ7 fieldを返し、401なら未ログインです。
 usernameまたはpasswordが違うログインはform-level 401です。
 `POST /auth/logout`成功時は204で本文がありません。ログイン・登録には、IPごとに毎分30回、
 canonical accountとIPの組み合わせごとに毎分5回の制限があります。
@@ -639,7 +607,7 @@ canonical accountとIPの組み合わせごとに毎分5回の制限がありま
 |    6 | Backend #104 / Front #94 | 非production demo seedを更新し、Frontをusername / displayNameへ切替          |
 |    7 | Backend #105 / #107      | login / me互換削除をmergeするが、単独ではproduction deployしない             |
 |    8 | Backend #108             | 利用者一覧route削除をmergeするが、単独ではproduction deployしない            |
-|    9 | Backend #106             | register互換・gate削除をmergeするが、単独ではproduction deployしない         |
+|    9 | Backend #106             | register互換・切替設定を削除するが、単独ではproduction deployしない          |
 |   10 | Backend #121             | #105 / #107 / #108 / #106を一つのmaintenance releaseとして同時公開           |
 |   11 | Backend #109             | 旧DB列を削除し、新列をNOT NULL化して完成時schemaを検証                       |
 
@@ -651,47 +619,35 @@ register route scopeに含まれないため、[B-AUTH-CUTOVER #118](https://git
 運用手順は[`auth-cutover.md`](./auth-cutover.md)です。#103の二重書き込みが有効になる前に#101 / #102へ
 trafficを流さず、#109の最終backfillをcutover確認の代わりにしません。
 
-`USERNAME_AUTH_ENABLED`は#101〜#103が共有したcutover gateです。local / testでは欠落時
-`false`、`APP_ENV=production`では明示設定を必須とし、欠落・空文字・`true` / `false`以外は設定errorで
-起動しません。#105以降のloginはusername経路だけを使い、#107以降の`GET /auth/me`は
-gateを参照せず最終User responseだけを返します。registerの旧分岐は#106まで残りますが、
-この途中状態はproductionへdeployしません。#103のregisterはcutover後も新旧requestを
-新旧列へ互換書き込みし、#106で旧requestと旧列writeを同時に削除します。
+#105以降のloginはusername経路だけを使い、#107以降の`GET /auth/me`は
+最終User responseだけを返します。#106で旧register requestと旧列writeを削除します。
 
-#101〜#103のgate true経路は`POST /auth/login`、`GET /auth/me`、`POST /auth/register`を
-新User DTOへ切り替えます。registerは新username requestを正としながら、#106まではlegacy requestも
-受理して新旧列へ互換書き込みします。logoutは変更しません。
+#101〜#103で`POST /auth/login`、`GET /auth/me`、`POST /auth/register`を
+新User DTOへ切り替えました。logoutの契約は変更しません。
 
-個別の#101 / #102 / #103をmergeした時点では、共有Backendの設定を`true`へ変更しません。
-#118で全API maintenance、backfill、全instanceの同一release確認を完了してから一括で有効化します。
+#118で全API maintenance、backfill、全instanceの同一release確認を完了してから一括で公開します。
 Frontend #94の共有環境への実API接続・mergeも、この#118のcutover完了を前提にします。
 
-認証cutover後も、旧login `{ email, password }`は#105が完了するまで、旧register
-`{ name, email, password, password_confirmation? }`は#106が完了するまで受理します。新旧fieldを
-一つのrequestに混在させた場合は422とし、混在した新旧固有fieldをそれぞれ`errors`へ返します。
-legacy requestのvalidation errorだけは旧Frontが表示できる旧field名を返し、新requestは常に
-camelCaseの新field名を返します。#105後のloginで`email`、#106後のregisterで`name`、`email`、
+旧login `{ email, password }`と旧register
+`{ name, email, password, password_confirmation? }`は受理しません。loginで`email`、registerで`name`、`email`、
 `password_confirmation`が一つでも送られた場合は、他のfieldが正しくても422とし、送られた旧field名を
 `errors`へ返します。削除済みfieldをunknown keyとして黙って無視しません。
 
 #105 / #107はlogin / meの旧branchを削除し、#108は利用者一覧routeを削除しますが、3 PRを単独では
-production deployしません。#106がlegacy register、旧列write、最後のfalse branch、config、testを
+production deployしません。#106がlegacy register、旧列write、切替分岐、config、testを
 削除したcommitまでを[B-AUTH-CONTRACT-CUTOVER #121](https://github.com/IH-Ggroup/minetenant-backend/issues/121)
 が一つのmaintenance releaseとして同時にdeployします。#105だけを先に公開して、
 emailで登録できるのにemailではloginできない中間状態を作りません。#108時点ではregister互換だけが
 既知の旧列accessとして残り、#106でruntime旧列reader / writerを0件にします。
 
 #100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設しました。#105でlogin、#107でme、
-#108で利用者一覧routeと共有legacy serializerを削除済みです。registerの旧response変換だけはroute内に
-#106まで限定し、他endpointへ広げません。emailと秘密情報は互換期間中もresponseへ返しません。
+#108で利用者一覧routeと共有legacy serializerを削除済みです。#106でregisterの旧response変換も削除し、
+全認証endpointが同じ7 fieldのUserを返します。emailと秘密情報はresponseへ返しません。
 
-password rehashの正本切替、binary CAS、旧新両列の同一transaction更新も
-[`auth-cutover.md`](./auth-cutover.md)を正本とします。loginは#105まで、registerは#106まで片方だけを
-更新しません。
+password rehashは`password_hash`だけをbinary CASで更新します。
 
-#103から#106まで、新requestで作る行も旧runtimeへrollbackできるよう、同じtransactionで旧列へ
-次の互換値を書きます。legacy requestは利用者が送った旧`name` / `email`とpassword hashを旧列へ
-書きつつ、新列も確定します。
+#103から#106まで、新requestは旧runtimeへrollbackできるよう、同じtransactionで旧列へ
+次の互換値を書いていました。#106以降の新規行は旧5列をNULLのままにします。
 
 | 旧列             | 新requestから書く互換値                                                      |
 | ---------------- | ---------------------------------------------------------------------------- |
@@ -704,21 +660,17 @@ password rehashの正本切替、binary CAS、旧新両列の同一transaction�
 synthetic emailは`legacy+` + `SHA-256(user_id + ":" + attempt)`のlowercase hex先頭48文字 +
 `@legacy.invalid`です。hash入力の規則は後述のusername生成と同じで、`attempt=0`から始め、
 UNIQUE競合時だけ99まで増やします。100候補すべてが衝突した場合はtransactionをrollbackし、
-秘密値を出さない内部errorとして停止します。cutover後のlegacy registerは
-`^legacy\+[0-9a-f]{48}@legacy\.invalid$`を422 `errors.email`で予約します。
+秘密値を出さない内部errorとして停止していました。
 
 #98 / #118のpreflightは、このnamespaceに一致する既存行ごとに同じuser_idのattempt 0〜99を再計算します。
 emailがいずれかの候補と一致し、`name / password / role_label / avatar_initial`も新列から導出した
 互換値と一致する正規generated行だけは、cutover再実行のため許可します。100候補で再現できない値や
 互換列が不整合な値は、自動変更せず`user_id`を内部向け診断へ出して停止します。
 
-synthetic emailは公開DTO、通常のUI、logへ出しません。synthetic emailによる旧loginも、DBで対応する
-保存済みusernameを取得し、usernameやreal legacy emailと同じcanonical account rate-limit bucketを
-消費します。
-pre-#106 runtimeへの緊急rollbackで必要な場合だけ、operatorがusernameから保存済みemailを検索します。
+synthetic emailは公開DTO、通常のUI、logへ出しません。
 #105 / #107をmergeし、#108で利用者一覧routeを削除して残る旧列accessがregister互換だけであることを
 確認してから、#106を最後にmergeします。#106はregisterの旧branchと旧列writeに加え、
-`USERNAME_AUTH_ENABLED`のconfig・残ったregister false branch・testを削除し、新requestの旧5列を
+旧認証のconfig・残ったregister false branch・testを削除し、新requestの旧5列を
 NULLのままにします。runbookの専用smoke userだけはcleanupとNULL残件0件を確認できればrollback可能ですが、
 その条件を外れた最初の#106 writeがdata point-of-no-returnです。4 PRを別々にproduction deployせず、
 backupと全API maintenanceの下で#121が同じreleaseとして切り替えます。再開後はpre-#106 runtimeへ

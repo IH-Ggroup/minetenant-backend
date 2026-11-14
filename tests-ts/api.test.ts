@@ -279,7 +279,9 @@ describe('Hono API on MySQL', () => {
     expect(
       await body(await guest.request('/api/v1/products/product-lamp'), 404),
     ).toEqual({ message: '商品が見つかりません。' });
+  });
 
+  it('returns an empty Minecraft catalog when no products exist', async () => {
     await test.db.execute('DELETE FROM purchase_transactions');
     await test.db.execute('DELETE FROM products');
     expect(
@@ -1025,8 +1027,8 @@ describe('Hono API on MySQL', () => {
     await expectStatus(await guest.request('/api/v1/auth/csrf-cookie'), 204);
     await expectStatus(
       await guest.json('/api/v1/auth/register', 'POST', {
-        name: 'Other User',
-        email: 'other@example.test',
+        username: 'other_user',
+        displayName: 'Other User',
         password: 'password-123',
       }),
       201,

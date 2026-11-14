@@ -18,18 +18,11 @@ HTTP契約は[`api.md`](./api.md)、完成時schemaとbackfill規則は[`databas
 - Backend #98〜#103、B-AUTH-SESSION #119、B-DB-STRICT-MODE #120が同じreleaseへ含まれ、全CIが
   成功している
 - #98が旧5列を一時的にNULL可へ緩和し、下記versioned commandを提供している
-- #101〜#103が同じ`USERNAME_AUTH_ENABLED`を使う。local / testでは欠落時`false`、
-  `APP_ENV=production`では明示設定が必須である
-- productionの欠落・空文字と、全環境の`true` / `false`以外ではprocessが起動しない
+- #105 / #107 / #108 / #106が同じusername認証契約を使う
 - production backupと復旧先を確認し、実行者・開始時刻・対象commitを#118へ記録している
 - Frontend #94はまだusername-only trafficへ切り替わっていない
 
-`USERNAME_AUTH_ENABLED=false`ではlegacy email endpointと旧serializerだけを公開し、新認証codeへ
-trafficを流しません。個別の#101 / #102 / #103をmergeしても共有環境は`false`を維持し、#118の
-maintenance windowでだけ一括して有効化します。最初のcutover成功後から#106まではproduction設定を
-明示的な`true`へ固定し、欠落または`false`の通常deployを失敗させます。#107を単独で実行すると、
-gate falseのlegacy registerが作る新認証3列NULLの行は最終`GET /auth/me` responseへ変換できません。
-#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
+認証endpointはusername契約だけを公開します。#105 / #107、#108、#106のPRはそのcode順でmergeしますが、
 途中commitをproductionへdeployしません。#106まで含む一つの互換削除maintenance releaseで、legacy
 login / me / users / register、旧列access、最後のfalse branch、config、testを同時に削除します。
 
@@ -95,9 +88,8 @@ reportを出力します。WindowsではACLによる同等の保護を実装し�
    DBのapplication user connectionがともに0件である証跡を残す。
 3. `db:auth-backfill -- --mode=apply`、続けて`--mode=check`を実行する。どちらかがnon-zeroなら新releaseを
    公開せず、診断・復旧後に手順2から再開する。
-4. maintenance routingを維持したまま、#101〜#103、#119、#120を含む全instanceを同一commitかつ
-   `USERNAME_AUTH_ENABLED=true`で起動する。
-5. 全instanceのcommit SHAとgate値を管理面から確認し、pre-#103 / pre-#119 / pre-#120 instanceが
+4. maintenance routingを維持したまま、#105 / #107 / #108 / #106を含む全instanceを同一commitで起動する。
+5. 全instanceのcommit SHAを管理面から確認し、pre-#106 instanceが
    0件である証跡を残す。
 6. `--mode=apply`と`--mode=check`をもう一度実行し、停止前に完了した旧runtimeの更新も吸収する。
 7. 内部経路で`register -> me -> logout -> csrf-cookie -> username login`、旧email login、
@@ -129,7 +121,7 @@ PRをmergeします。#121は途中commitをproductionへdeployせず、次を�
    旧5列がNULLでも新列だけで再loginできることを確認する。legacy email login、legacy register、
    legacy field、削除済みの利用者一覧routeがそれぞれ契約どおり422または404になることも内部経路で確認する。
 6. production APIのruntime code pathと通常testに旧5列reader / writer、legacy serializerが0件で、
-   feature gateの設定・参照・testがrepo全体で0件であることを確認する。#109まで残すversioned
+   認証切り替え設定・分岐・testがrepo全体で0件であることを確認する。#109まで残すversioned
    `db:auth-backfill` commandと専用testだけは、旧列readerの期限付きallowlistとする。
 7. smoke userに紐づくsession、Store、Userを監査可能な順でcleanupし、旧5列のいずれかがNULLの残存行が
    0件であることを確認する。この確認まで外部trafficと他の新規writeを許可しない。
@@ -140,7 +132,7 @@ PRをmergeします。#121は途中commitをproductionへdeployせず、次を�
 手順4以後に失敗しても、smoke以外の#106 writeがなく、smoke userと関連dataのcleanupに成功し、旧5列の
 いずれかがNULLの残存行が0件ならmaintenance中のrollbackが可能です。新instanceをすべて停止し、smokeの
 session、Store、Userを依存順にcleanupしてNULL残件0件を再確認した後、最後のlegacy-compatible releaseを
-`USERNAME_AUTH_ENABLED=true`で起動します。全instanceのcommit SHAとgate値を確認し、内部smokeを通して
+対象commitで起動します。全instanceのcommit SHAを確認し、内部smokeを通して
 からmaintenanceを解除します。cleanup失敗、NULL残存、またはsmoke以外の#106 writeを一つでも確認した
 場合はmaintenanceを継続し、旧releaseを起動せずforward-fixします。開始・終了、cleanup件数、NULL残件、
 rollback先SHA、判断結果を#121へ残します。
@@ -150,35 +142,26 @@ emailではloginできない中間状態を作りません。#109はこのreleas
 
 ## Password rehashと互換期間
 
-password hashの正本は最初のcutoverまでは旧`password`、cutover成功後は新`password_hash`です。
-gate falseのemail loginは、照合後にcostを上げる場合だけ旧`password`をbinary CAS条件にして、同じ
-新hashを`password`と`password_hash`へ一つのUPDATEで書きます。これによりcutover前のrehash後も
-`db:auth-backfill`がhash差分で停止しません。gate trueのloginは
-`password_hash`をbinary CAS条件にして両列を同じhashへ更新します。CASが0件なら再読込・再照合し、
-古いhashで新しいhashを上書きしません。#103のregisterも最初から両列へ同じhashを書きます。
-#105まではloginが両列を更新し、#105で旧passwordのread / writeをloginから削除します。registerは
-#106まで両列へ書き、#106で旧列writeを削除します。各endpointの期限より前に片方だけを更新しません。
+password hashの正本は新`password_hash`です。loginのrehashは`password_hash`をbinary CAS条件に
+更新します。CASが0件なら再読込・再照合し、古いhashで新しいhashを上書きしません。
+registerも`password_hash`だけへ書き込みます。
 
 ## Rollback
 
-- gate有効化前は`false`のまま中止し、診断後に本runbookの手順2から再開する
-- #103のcutover後かつ互換削除releaseの本番適用開始前に戻す場合は、全API maintenanceへ切り替えてから
-  gateを`false`にする。新request行は
-  旧列互換値を持つためdata互換だが、logout済みのusername登録利用者はuser_id由来のsynthetic emailを
-  知らず、旧email loginを透過的には再開できない
-- 原則は認証maintenanceのままforward-fixする。やむを得ない場合だけoperatorが保存済みsynthetic
-  emailを安全に検索して本人へ伝え、公開DTO・通常log・運用画面へ出さない
-- 旧writerでregisterを再開した場合はNULL行やhash差分が再び増え得るため、次回は手順1から全工程を
-  再実行する
-- 互換削除releaseでtrafficを再開した後は旧auth全体へ戻さずforward-fixする
+- 互換削除releaseの起動前は、全API maintenanceを維持したまま旧releaseへ戻せる
+- #106を含むreleaseで作成した利用者は旧5列がすべてNULLであり、旧releaseとはdata互換がない
+- 新releaseの起動後に戻せるのは、外部trafficをまだ再開しておらず、確認用userと関連dataを削除して
+  旧5列NULL残件が0件であることを確認できた場合だけとする
+- 外部traffic再開後、smoke以外の#106 register write、cleanup失敗、旧5列NULL残件のいずれかがある場合は
+  旧releaseを起動せず、認証maintenanceを維持してforward-fixする
+- 旧releaseへ戻した場合は、次回の互換削除releaseで本runbookの手順1から全工程を再実行する
 
 ## 必須テストと証跡
 
 #98〜#103、#119、#120、#118と、#105〜#108、#106、#121は、通常のunit / integration testに加えて
 次を確認します。
 
-- #118の初回cutover releaseではgate falseで現行register / login / meのrequestとresponseが変わらず、
-  #105以後のlogin、#107以後のmeはgateに依存しない最終request / responseだけを使う
+- #105以後のlogin、#107以後のmeは最終request / responseだけを使う
 - 空DB、移行直後、#98記録後に追加されたNULL行、部分適用済みDB、連続applyでcommandが冪等に動く
 - 同じdatabaseへの同時check / applyまたはapply / applyの片方がnamed lock取得に失敗し、別databaseは
   独立して実行できる。lock取得から解放まで同じconnectionを使い、解放確認失敗時はconnectionを破棄する
@@ -186,12 +169,12 @@ gate falseのemail loginは、照合後にcostを上げる場合だけ旧`passwo
   synthetic email不整合、display_name超過ではfail closedになる
 - #105前はrehash後も旧新hashがbyte一致し、#105以後は`password_hash`だけのbinary CAS競合で
   新しいhashを古い結果で上書きしない
-- #118ではmaintenance、旧instance / DB connection 0件、全新instanceの同一commit / gate trueを
+- #118ではmaintenance、旧instance / DB connection 0件、全新instanceの同一commitを
   証跡で確認する
-- #118ではgate trueで新旧request、route-local adapter、session、CSRF、rate limit、CORSが契約どおり
+- #118では新旧request、route-local adapter、session、CSRF、rate limit、CORSが契約どおり
   動くことを確認し、rollback rehearsalの開始・終了、対象commit、件数、判断結果を#118へ残す
 - #121ではmaintenance、旧instance / DB connection 0件、全新instanceが#105 / #107 / #108 / #106を
-  含む同一commitであることを証跡で確認する。`USERNAME_AUTH_ENABLED`の設定・参照・testが0件で、
+  含む同一commitであることを証跡で確認する。旧認証の設定・分岐・testが0件で、
   全endpointが新経路だけを使うことも確認する
 - #121では#106経路で作った確認用userが旧5列NULLのままloginできること、確認用userの削除成功、
   旧5列NULL残件0件を順に記録する。開始・終了、対象commit SHA、smoke結果、削除結果、残件数、

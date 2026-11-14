@@ -129,12 +129,12 @@ describe('safe migration and initial data setup', () => {
     expect(await rowCounts()).toEqual([2, 2, 6, 1]);
     const users = await test.db.query<{
       userId: string;
-      name: string;
-      email: string;
+      name: null;
+      email: null;
       role: 'buyer' | 'seller';
-      roleLabel: string;
-      avatarInitial: string;
-      password: string;
+      roleLabel: null;
+      avatarInitial: null;
+      password: null;
       username: string;
       displayName: string;
       passwordHash: string;
@@ -155,31 +155,29 @@ describe('safe migration and initial data setup', () => {
     ).toEqual([
       {
         userId: 'user-buyer',
-        name: '山田 みどり',
-        email: 'demo@minetenant.jp',
+        name: null,
+        email: null,
         role: 'buyer',
-        roleLabel: '購入者デモ',
-        avatarInitial: '山',
+        roleLabel: null,
+        avatarInitial: null,
         username: 'demo',
         displayName: '山田 みどり',
         storeId: 'store-yamada',
       },
       {
         userId: 'user-seller',
-        name: '青鉱舎 店長',
-        email: 'seller@minetenant.jp',
+        name: null,
+        email: null,
         role: 'seller',
-        roleLabel: '出品者デモ',
-        avatarInitial: 'M',
+        roleLabel: null,
+        avatarInitial: null,
         username: 'seller',
         displayName: '青鉱舎 店長',
         storeId: 'store-mine',
       },
     ]);
     for (const user of users) {
-      expect(user.password).not.toBe('password');
-      expect(user.passwordHash).toBe(user.password);
-      expect(await bcrypt.compare('password', user.password)).toBe(true);
+      expect(user.password).toBeNull();
       expect(await bcrypt.compare('password', user.passwordHash)).toBe(true);
     }
     await expect(runAuthBackfill(test.db, 'check')).resolves.toEqual({
@@ -257,10 +255,7 @@ describe('safe migration and initial data setup', () => {
   });
 
   it('logs in both seeded users by username and restores the same session user', async () => {
-    const app = createApp({
-      db: test.db,
-      config: { ...test.config, usernameAuthEnabled: true },
-    });
+    const app = createApp({ db: test.db, config: test.config });
     const accounts = [
       {
         username: 'demo',
@@ -614,7 +609,6 @@ describe('setup command boundaries', () => {
             env: {
               ...process.env,
               APP_ENV: 'production',
-              USERNAME_AUTH_ENABLED: 'false',
               DB_CONNECTION: 'mysql',
               DB_HOST: '127.0.0.1',
               DB_PORT: '1',

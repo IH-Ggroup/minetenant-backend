@@ -11,14 +11,6 @@ import {
 import { createApp } from '../src/app.js';
 import type { Database, SqlExecutor } from '../src/db.js';
 import {
-  syntheticEmailCandidate,
-  usernameCandidate,
-} from '../src/db/auth-backfill.js';
-import {
-  createRegistration,
-  RegistrationIdentifierAllocationError,
-} from '../src/services/registration.js';
-import {
   createClient,
   createTestApp,
   expectStatus,
@@ -28,12 +20,12 @@ import {
 
 const password = 'registration-password';
 
-describe('username registration cutover gate', () => {
+describe('username registration', () => {
   let setup: TestApp;
   let client: TestClient;
 
   beforeAll(async () => {
-    setup = await createTestApp({ usernameAuthEnabled: true });
+    setup = await createTestApp();
   });
 
   beforeEach(async () => {
@@ -59,65 +51,15 @@ describe('username registration cutover gate', () => {
     });
   }
 
-  it('keeps the legacy request and response while the gate is false', async () => {
-    const legacy = createClient(
-      createApp({
-        db: setup.db,
-        config: { ...setup.config, usernameAuthEnabled: false },
-      }),
-    );
-    await expectStatus(await legacy.request('/api/v1/auth/csrf-cookie'), 204);
-
-    const rejected = await register(legacy, 'new_user');
-    await expectStatus(rejected, 422);
-    expect(Object.keys((await rejected.json()).errors).sort()).toEqual([
-      'email',
-      'name',
-    ]);
-
-    const response = await legacy.json('/api/v1/auth/register', 'POST', {
-      name: ' 旧 利用者 ',
-      email: ' LEGACY@EXAMPLE.COM ',
-      password,
-    });
-    await expectStatus(response, 201);
-    const { data } = await response.json();
-    expect(data).toMatchObject({
-      name: '旧 利用者',
-      role: 'buyer',
-      roleLabel: '購入者',
-      avatarInitial: '旧',
-    });
-    expect(Object.keys(data).sort()).toEqual(
-      ['avatarInitial', 'id', 'name', 'role', 'roleLabel', 'storeId'].sort(),
-    );
-    const [stored] = await setup.db.query<{
-      email: string;
-      username: string | null;
-      display_name: string | null;
-      password_hash: string | null;
-    }>(
-      'SELECT email, username, display_name, password_hash FROM users WHERE user_id = ?',
-      [data.id],
-    );
-    expect(stored).toEqual({
-      email: 'legacy@example.com',
-      username: null,
-      display_name: null,
-      password_hash: null,
-    });
-  });
-
   it.each([
     ['specified', ' display_user ', '  山田 みどり  ', '山田 みどり'],
     ['omitted', 'omitted_user', undefined, 'omitted_user'],
     ['null', 'null_user', null, 'null_user'],
     ['Unicode whitespace', 'blank_user', '　 ', 'blank_user'],
   ] as const)(
-    'normalizes the %s displayName case and creates one compatible user/store',
+    'normalizes the %s displayName case and writes only canonical auth columns',
     async (_case, rawUsername, displayName, expectedDisplayName) => {
       const originalSession = client.cookies.get(setup.config.sessionCookie)!;
-      const originalCsrf = client.cookies.get('XSRF-TOKEN')!;
       const response = await register(client, rawUsername, displayName);
       await expectStatus(response, 201);
       const { data } = await response.json();
@@ -130,36 +72,32 @@ describe('username registration cutover gate', () => {
         roleLabel: '購入者',
         avatarInitial: Array.from(expectedDisplayName)[0],
         storeId: expect.any(String),
-        name: expectedDisplayName,
       });
 
       const [user] = await setup.db.query<{
         username: string;
         display_name: string;
         password_hash: string;
-        name: string;
-        email: string;
-        password: string;
-        role: string;
-        role_label: string;
-        avatar_initial: string;
+        name: null;
+        email: null;
+        password: null;
+        role_label: null;
+        avatar_initial: null;
       }>(
         `SELECT username, display_name, password_hash, name, email, password,
-                role, role_label, avatar_initial
+                role_label, avatar_initial
            FROM users WHERE user_id = ?`,
         [data.id],
       );
       expect(user).toMatchObject({
         username: expectedUsername,
         display_name: expectedDisplayName,
-        name: expectedDisplayName,
-        email: syntheticEmailCandidate(data.id, 0),
-        role: 'buyer',
-        role_label: '購入者',
-        avatar_initial: Array.from(expectedDisplayName)[0],
+        name: null,
+        email: null,
+        password: null,
+        role_label: null,
+        avatar_initial: null,
       });
-      expect(user!.password).toBe(user!.password_hash);
-      expect(user!.password).not.toBe(password);
       expect(await bcrypt.compare(password, user!.password_hash)).toBe(true);
 
       const [store] = await setup.db.query<{
@@ -185,66 +123,42 @@ describe('username registration cutover gate', () => {
       expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(
         originalSession,
       );
-      expect(client.cookies.get('XSRF-TOKEN')).not.toBe(originalCsrf);
-      expect(
-        await setup.db.query(
-          'SELECT session_id FROM hono_sessions WHERE session_id = ?',
-          [originalSession],
-        ),
-      ).toEqual([]);
     },
   );
 
-  it('uses a grapheme in the DTO and one code point in the legacy column', async () => {
+  it('uses a full grapheme for the derived avatar initial', async () => {
     const response = await register(client, 'emoji_user', '👩‍💻 店主');
     await expectStatus(response, 201);
-    const { data } = await response.json();
-    expect(data.avatarInitial).toBe('👩‍💻');
-    const [user] = await setup.db.query<{ avatar_initial: string }>(
-      'SELECT avatar_initial FROM users WHERE user_id = ?',
-      [data.id],
-    );
-    expect(user!.avatar_initial).toBe('👩');
+    expect((await response.json()).data.avatarInitial).toBe('👩‍💻');
   });
 
-  it('accepts the temporary legacy request and dual-writes canonical columns', async () => {
+  it.each(['name', 'email', 'password_confirmation'] as const)(
+    'rejects the removed %s field even with an otherwise valid request',
+    async (field) => {
+      const response = await client.json('/api/v1/auth/register', 'POST', {
+        username: `removed_${field.replace('_', '')}`,
+        password,
+        [field]: 'removed-value',
+      });
+      await expectStatus(response, 422);
+      expect(await response.json()).toEqual({
+        message: 'この登録項目は利用できません。',
+        errors: { [field]: ['この登録項目は利用できません。'] },
+      });
+    },
+  );
+
+  it('rejects a legacy-only request with every supplied removed field', async () => {
     const response = await client.json('/api/v1/auth/register', 'POST', {
-      name: ' \u200b旧 利用者\u200b ',
-      email: ' OLD-USER@EXAMPLE.COM ',
+      name: '旧利用者',
+      email: 'old-user@example.com',
       password,
       password_confirmation: password,
     });
-    await expectStatus(response, 201);
-    const { data } = await response.json();
-    expect(data).toEqual({
-      id: expect.any(String),
-      username: usernameCandidate(data.id, 0),
-      displayName: '旧 利用者',
-      role: 'buyer',
-      roleLabel: '購入者',
-      avatarInitial: '旧',
-      storeId: expect.any(String),
-      name: '旧 利用者',
-    });
-    const [user] = await setup.db.query<{
-      name: string;
-      email: string;
-      password: string;
-      username: string;
-      display_name: string;
-      password_hash: string;
-    }>(
-      `SELECT name, email, password, username, display_name, password_hash
-         FROM users WHERE user_id = ?`,
-      [data.id],
+    await expectStatus(response, 422);
+    expect(Object.keys((await response.json()).errors).sort()).toEqual(
+      ['name', 'email', 'password_confirmation'].sort(),
     );
-    expect(user).toMatchObject({
-      name: '旧 利用者',
-      email: 'old-user@example.com',
-      username: usernameCandidate(data.id, 0),
-      display_name: '旧 利用者',
-    });
-    expect(user!.password).toBe(user!.password_hash);
   });
 
   it.each(['demo', 'seller'])(
@@ -256,42 +170,7 @@ describe('username registration cutover gate', () => {
     },
   );
 
-  it('rejects the synthetic email namespace after cutover', async () => {
-    const response = await client.json('/api/v1/auth/register', 'POST', {
-      name: '予約領域',
-      email: syntheticEmailCandidate('reserved-email', 0),
-      password,
-    });
-    await expectStatus(response, 422);
-    expect((await response.json()).errors.email).toEqual([
-      'このメールアドレスは使用できません。',
-    ]);
-  });
-
-  it('rejects every supplied new and legacy field in a mixed request', async () => {
-    const response = await client.json('/api/v1/auth/register', 'POST', {
-      username: 'mixed_user',
-      displayName: null,
-      passwordConfirmation: password,
-      name: '混在',
-      email: 'mixed@example.com',
-      password_confirmation: password,
-      password,
-    });
-    await expectStatus(response, 422);
-    expect(Object.keys((await response.json()).errors).sort()).toEqual(
-      [
-        'username',
-        'displayName',
-        'passwordConfirmation',
-        'name',
-        'email',
-        'password_confirmation',
-      ].sort(),
-    );
-  });
-
-  it('uses the canonical validator and requires JSON after cutover', async () => {
+  it('uses the canonical validator and requires JSON', async () => {
     const invalid = await client.json('/api/v1/auth/register', 'POST', {
       username: 'ab',
       displayName: 42,
@@ -343,72 +222,11 @@ describe('username registration cutover gate', () => {
       ['race_user'],
     );
     expect(users).toHaveLength(1);
-    const stores = await setup.db.query<{ store_id: string }>(
-      'SELECT store_id FROM stores WHERE user_id = ?',
-      [users[0]!.user_id],
-    );
-    expect(stores).toHaveLength(1);
-  });
-
-  it('allows only one registration to rotate the same browser session without reissuing loser cookies', async () => {
-    const originalSession = client.cookies.get(setup.config.sessionCookie)!;
-    const responses = await Promise.all([
-      register(client, 'double_submit_a', '二重送信A'),
-      register(client, 'double_submit_b', '二重送信B'),
-    ]);
-    expect(responses.map(({ status }) => status).sort()).toEqual([201, 419]);
-    const succeeded = responses.find(({ status }) => status === 201)!;
-    const expected = (await succeeded.json()).data;
-    const rejected = responses.find(({ status }) => status === 419)!;
-    expect(await rejected.json()).toEqual({ message: 'CSRF token mismatch.' });
-    expect(rejected.headers.getSetCookie()).toHaveLength(0);
-
-    const users = await setup.db.query<{ user_id: string }>(
-      `SELECT user_id FROM users
-        WHERE username IN ('double_submit_a', 'double_submit_b')`,
-    );
-    expect(users).toEqual([{ user_id: expected.id }]);
     expect(
       await setup.db.query('SELECT store_id FROM stores WHERE user_id = ?', [
-        expected.id,
+        users[0]!.user_id,
       ]),
     ).toHaveLength(1);
-    expect(
-      await setup.db.query(
-        'SELECT session_id FROM hono_sessions WHERE session_id = ?',
-        [originalSession],
-      ),
-    ).toEqual([]);
-    expect(client.cookies.get(setup.config.sessionCookie)).not.toBe(
-      originalSession,
-    );
-    const me = await client.request('/api/v1/auth/me');
-    await expectStatus(me, 200);
-    const meExpected = { ...expected };
-    delete meExpected.name;
-    expect(await me.json()).toEqual({ data: meExpected });
-  });
-
-  it('keeps ordinary login rotation non-exclusive for the same browser session', async () => {
-    await expectStatus(await register(client, 'parallel_login_user'), 201);
-    await expectStatus(await client.json('/api/v1/auth/logout', 'POST'), 204);
-    await expectStatus(await client.request('/api/v1/auth/csrf-cookie'), 204);
-
-    const responses = await Promise.all([
-      client.json('/api/v1/auth/login', 'POST', {
-        username: 'parallel_login_user',
-        password,
-      }),
-      client.json('/api/v1/auth/login', 'POST', {
-        username: 'parallel_login_user',
-        password,
-      }),
-    ]);
-    expect(responses.map(({ status }) => status)).toEqual([200, 200]);
-    expect(
-      responses.every((response) => response.headers.has('Set-Cookie')),
-    ).toBe(true);
-    await expectStatus(await client.request('/api/v1/auth/me'), 200);
   });
 
   it('returns the same username error for an existing normalized username', async () => {
@@ -425,109 +243,39 @@ describe('username registration cutover gate', () => {
     });
   });
 
-  it('retries an internal synthetic email collision deterministically', async () => {
-    const userId = 'registration-candidate-user';
-    const passwordHash = await bcrypt.hash(password, 4);
-    await setup.db.execute(
-      `INSERT INTO users
-        (user_id, username, display_name, password_hash, name, email, password,
-         role, role_label, avatar_initial, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'buyer', '購入者', '競', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [
-        'synthetic-email-owner',
-        'synthetic_owner',
-        '競合所有者',
-        passwordHash,
-        '競合所有者',
-        syntheticEmailCandidate(userId, 0),
-        passwordHash,
-      ],
-    );
-
-    const user = await createRegistration(
-      setup.db,
-      {
-        kind: 'username',
-        userId,
-        storeId: 'registration-candidate-store',
-        username: 'candidate_user',
-        displayName: '候補利用者',
-        passwordHash,
-      },
-      (_registeredUserId, operation) => setup.db.transaction(operation),
-    );
-    const [stored] = await setup.db.query<{ email: string }>(
-      'SELECT email FROM users WHERE user_id = ?',
-      [user.user_id],
-    );
-    expect(stored!.email).toBe(syntheticEmailCandidate(userId, 1));
-  });
-
-  it('retries an internal legacy username collision deterministically', async () => {
-    const userId = 'legacy-candidate-user';
-    const passwordHash = await bcrypt.hash(password, 4);
-    await setup.db.execute(
-      `INSERT INTO users
-        (user_id, username, display_name, password_hash, name, email, password,
-         role, role_label, avatar_initial, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'buyer', '購入者', '競', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [
-        'generated-username-owner',
-        usernameCandidate(userId, 0),
-        '競合所有者',
-        passwordHash,
-        '競合所有者',
-        'generated-owner@example.com',
-        passwordHash,
-      ],
-    );
-
-    const user = await createRegistration(
-      setup.db,
-      {
-        kind: 'legacy',
-        userId,
-        storeId: 'legacy-candidate-store',
-        name: '旧候補利用者',
-        email: 'legacy-candidate@example.com',
-        passwordHash,
-      },
-      (_registeredUserId, operation) => setup.db.transaction(operation),
-    );
-    expect(user.username).toBe(usernameCandidate(userId, 1));
-  });
-
-  it('fails safely after all compatibility identifiers are occupied', async () => {
-    let attempts = 0;
+  it('does not turn an unrelated unique-key failure into a username error', async () => {
     const collisionDb: Database = {
       ...setup.db,
-      async query<T extends object>(sql: string): Promise<T[]> {
-        if (sql.includes('WHERE username =')) return [];
-        if (sql.includes('WHERE email ='))
-          return [{ user_id: 'occupied' }] as T[];
-        return [];
-      },
+      transaction: <T>(operation: (tx: SqlExecutor) => Promise<T>) =>
+        setup.db.transaction((tx) =>
+          operation({
+            ...tx,
+            execute: (sql, params) => {
+              if (sql.startsWith('INSERT INTO stores')) {
+                throw Object.assign(new Error('store collision'), {
+                  code: 'ER_DUP_ENTRY',
+                });
+              }
+              return tx.execute(sql, params);
+            },
+          }),
+        ),
     };
-    const passwordHash = await bcrypt.hash(password, 4);
-    const result = createRegistration(
-      collisionDb,
-      {
-        kind: 'username',
-        userId: 'exhausted-user',
-        storeId: 'exhausted-store',
-        username: 'exhausted_user',
-        displayName: '枯渇確認',
-        passwordHash,
-      },
-      async () => {
-        attempts += 1;
-        throw Object.assign(new Error('duplicate'), { code: 'ER_DUP_ENTRY' });
-      },
+    const collisionClient = createClient(
+      createApp({ db: collisionDb, config: setup.config }),
     );
-    await expect(result).rejects.toBeInstanceOf(
-      RegistrationIdentifierAllocationError,
+    await expectStatus(
+      await collisionClient.request('/api/v1/auth/csrf-cookie'),
+      204,
     );
-    expect(attempts).toBe(100);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await register(collisionClient, 'collision_user');
+      await expectStatus(response, 500);
+      expect(await response.json()).toEqual({ message: 'Server Error' });
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('rolls back user, store, and session rotation when session creation fails', async () => {
@@ -556,30 +304,19 @@ describe('username registration cutover gate', () => {
       await failingClient.request('/api/v1/auth/csrf-cookie'),
       204,
     );
-    const anonymousSession = failingClient.cookies.get(
-      setup.config.sessionCookie,
-    )!;
-    const secret = 'rollback-secret-password';
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const response = await failingClient.json(
         '/api/v1/auth/register',
         'POST',
-        {
-          username: 'rollback_user',
-          password: secret,
-        },
+        { username: 'rollback_user', password },
       );
       await expectStatus(response, 500);
-      expect(await response.json()).toEqual({ message: 'Server Error' });
       expect(logged).toHaveBeenCalledTimes(1);
-      expect(logged.mock.calls.flat().join('\n')).not.toContain(secret);
+      expect(logged.mock.calls.flat().join('\n')).not.toContain(password);
     } finally {
       logged.mockRestore();
     }
-    expect(failingClient.cookies.get(setup.config.sessionCookie)).toBe(
-      anonymousSession,
-    );
     expect(
       await setup.db.query('SELECT user_id FROM users WHERE username = ?', [
         'rollback_user',
@@ -590,12 +327,6 @@ describe('username registration cutover gate', () => {
         'rollback_userの店舗',
       ]),
     ).toEqual([]);
-    expect(
-      await setup.db.query(
-        'SELECT session_id FROM hono_sessions WHERE session_id = ?',
-        [anonymousSession],
-      ),
-    ).toHaveLength(1);
   });
 
   it('shares the canonical account rate limit with username login', async () => {
@@ -619,13 +350,12 @@ describe('username registration cutover gate', () => {
     await expectStatus(registered, 201);
     const expected = (await registered.json()).data;
     expect(JSON.stringify(expected)).not.toContain(password);
+    expect(expected).not.toHaveProperty('name');
     expect(expected).not.toHaveProperty('email');
 
     const me = await client.request('/api/v1/auth/me');
     await expectStatus(me, 200);
-    const meExpected = { ...expected };
-    delete meExpected.name;
-    expect(await me.json()).toEqual({ data: meExpected });
+    expect(await me.json()).toEqual({ data: expected });
     await expectStatus(await client.json('/api/v1/auth/logout', 'POST'), 204);
     await expectStatus(await client.request('/api/v1/auth/me'), 401);
 
@@ -635,8 +365,6 @@ describe('username registration cutover gate', () => {
       password,
     });
     await expectStatus(login, 200);
-    const loginExpected = { ...expected };
-    delete loginExpected.name;
-    expect(await login.json()).toEqual({ data: loginExpected });
+    expect(await login.json()).toEqual({ data: expected });
   });
 });

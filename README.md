@@ -60,18 +60,13 @@ MySQL本体のインストールやOSサービスの起動は自動化しませ�
 接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
-username認証は`USERNAME_AUTH_ENABLED`で段階的に切り替えます。local / testでは省略時`false`ですが、
-新規local環境は`.env.example`から`true`を設定します。既存の`.env`は自動で上書きしないため、
-`USERNAME_AUTH_ENABLED=true`を設定してAPIを再起動してください。
-productionでは`true`または`false`の明示設定が必須です。productionでの欠落・空文字と、
-全環境の`true` / `false`以外の値では起動しません。
-loginは設定値にかかわらずusername方式だけを受け付け、email入力は422です。
-`GET /auth/me`も設定値にかかわらず最終User responseを返します。#106まではregisterに旧仕様の
-分岐が残りますが、#105以降の途中commitはproductionへ個別deployしません。共有環境では
-#105・#107・#108・#106を含むreleaseを#121のmaintenanceで同時に公開します。
+認証APIはusername方式だけを受け付けます。registerは`username`・任意の`displayName`・
+`password`・任意の`passwordConfirmation`を使用し、旧`name`・`email`・
+`password_confirmation`は422です。loginのemail入力も422です。
+#105・#107・#108・#106を含むreleaseは、#121のmaintenanceで同時に共有環境へ公開します。
 
-`0003_username_auth`適用後も、legacy registerが作る新しい認証3列すべてNULLの行は想定内です。
-#118のcutoverでは、共有trafficを`true`へ切り替える前に移行用commandで補完・検証します。
+`0003_username_auth`適用後に登録した利用者は旧認証5列がNULLでも正常です。
+#121の公開前に移行用commandで既存行を補完・検証します。
 
 [疎通確認](http://localhost:8787/api/hello)が
 `MineTenant API is running.`を返せば起動完了です。停止は`Ctrl+C`です。
@@ -120,11 +115,7 @@ bcryptパスワード（`$2b$`・`$2y$`）を照合できます。
 
 空DBへ作るローカル開発専用アカウントは、購入者がusername `demo`、出品者がusername `seller`、
 パスワードは双方`password`です。seedは既存データがあるDBを削除・上書きせず、productionでは
-実行できません。既存cloneでは`.env`へ`USERNAME_AUTH_ENABLED=true`を設定し、APIを再起動してから
-usernameでログインしてください。
-
-切り替え設定を`false`にした互換経路では、従来どおり`demo@minetenant.jp`と
-`seller@minetenant.jp`をemailとして使用できます。
+実行できません。usernameでログインしてください。
 
 [API仕様](docs/api.md)に全エンドポイントを記載しています。
 
@@ -219,7 +210,6 @@ Cloudflare Workers + D1へのDB変更やデプロイは含みません。
 APP_ENV=production
 APP_DEBUG=false
 APP_URL=https://YOUR-FRONTEND.workers.dev
-USERNAME_AUTH_ENABLED=false
 MINETENANT_PUBLIC_TUNNEL=true
 MINETENANT_ORIGIN_TOKEN=32文字以上のランダムな秘密値
 SESSION_SECURE_COOKIE=true

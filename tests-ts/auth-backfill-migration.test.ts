@@ -447,6 +447,52 @@ describe('0003 username auth migration and catch-up command', () => {
     ]);
   });
 
+  it('accepts final auth rows and rejects partial legacy or missing password data', async () => {
+    await prepareCurrentEmptySchema(test.db);
+    await test.db.execute(
+      `INSERT INTO users
+        (user_id, role, username, display_name, password_hash)
+       VALUES ('final-auth-user', 'buyer', 'final_auth_user', '最終利用者', ?)`,
+      [VALID_HASH],
+    );
+    await expect(runAuthBackfill(test.db, 'check')).resolves.toMatchObject({
+      totalRows: 1,
+      plannedUpdateRows: 0,
+      updatedRows: 0,
+    });
+
+    await test.db.execute(
+      `INSERT INTO users
+        (user_id, name, role, username, display_name, password_hash)
+       VALUES ('partial-legacy-user', '旧表示名', 'buyer',
+               'partial_legacy_user', '部分互換利用者', ?)`,
+      [VALID_HASH],
+    );
+    await test.db.execute(
+      `INSERT INTO users
+        (user_id, role, username, display_name)
+       VALUES ('missing-password-user', 'buyer',
+               'missing_password_user', 'hashなし利用者')`,
+    );
+
+    const error = await runAuthBackfill(test.db, 'check').catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(AuthBackfillDataError);
+    expect((error as AuthBackfillDataError).violations).toEqual(
+      expect.arrayContaining([
+        {
+          userId: 'partial-legacy-user',
+          violationCode: 'LEGACY_COMPATIBILITY_INCOMPLETE',
+        },
+        {
+          userId: 'missing-password-user',
+          violationCode: 'PASSWORD_HASH_INVALID',
+        },
+      ]),
+    );
+  });
+
   it('rolls back every row when validation fails after additive DDL', async () => {
     await insertLegacyUser(test.db, { userId: 'valid-user' });
     await insertLegacyUser(test.db, {
