@@ -1,7 +1,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
-import { HttpError, notFound } from '../domain/errors.js';
+import { HttpError, notFound, productNotFound } from '../domain/errors.js';
 import {
   serializeProduct,
   serializeStore,
@@ -11,14 +11,16 @@ import {
   productCategories,
   productThemes,
   type ProductCategory,
-  type ProductRow,
   type ProductTheme,
   type StoreRow,
   type TransactionRow,
 } from '../domain/types.js';
 import { parseBody, parseQuery, Validator } from '../domain/validation.js';
 import { createProduct, deleteProduct } from '../services/products.js';
-import { listPublicProducts } from '../services/public-products.js';
+import {
+  findPublicProduct,
+  listPublicProducts,
+} from '../services/public-products.js';
 import { getStoreDashboard } from '../services/store-dashboard.js';
 import type { AppEnv } from '../types.js';
 
@@ -48,11 +50,8 @@ export function createCatalogRoutes(
   });
 
   routes.get('/products/:product', async (c) => {
-    const [product] = await db.query<ProductRow>(
-      'SELECT * FROM products WHERE product_id = ?',
-      [c.req.param('product')],
-    );
-    if (!product) notFound();
+    const product = await findPublicProduct(db, c.req.param('product'));
+    if (!product) productNotFound();
     return c.json({ data: serializeProduct(product) });
   });
 

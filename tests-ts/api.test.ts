@@ -192,10 +192,10 @@ describe('Hono API on MySQL', () => {
       'product-toolbag',
       'product-lamp',
     ]);
-    const detail = await body(
+    const soldDetail = await body(
       await guest.request('/api/v1/products/product-stool'),
     );
-    expect(detail.data).toEqual({
+    expect(soldDetail.data).toEqual({
       id: 'product-stool',
       storeId: 'store-mine',
       sellerId: 'user-seller',
@@ -209,6 +209,13 @@ describe('Hono API on MySQL', () => {
       emoji: '🪵',
       createdAt: '2026-07-17T04:30:00.000000Z',
     });
+    const availableDetail = await body(
+      await guest.request('/api/v1/products/product-hoodie'),
+    );
+    expect(availableDetail.data.status).toBe('available');
+    expect(Object.keys(availableDetail.data)).toEqual(
+      Object.keys(soldDetail.data),
+    );
     expect(
       await body(await guest.request('/api/v1/minecraft/catalog')),
     ).toEqual({ data });
@@ -216,7 +223,9 @@ describe('Hono API on MySQL', () => {
       data.find((product: { id: string }) => product.id === 'product-notebook')
         .status,
     ).toBe('sold');
-    await expectStatus(await guest.request('/api/v1/products/missing'), 404);
+    expect(
+      await body(await guest.request('/api/v1/products/missing'), 404),
+    ).toEqual({ message: '商品が見つかりません。' });
   });
 
   it('excludes soft-deleted products from every public list filter', async () => {
@@ -257,6 +266,9 @@ describe('Hono API on MySQL', () => {
         .filter((product: { status: string }) => product.status === 'sold')
         .map((product: { id: string }) => product.id),
     ).toEqual(['product-stool', 'product-notebook']);
+    expect(
+      await body(await guest.request('/api/v1/products/product-lamp'), 404),
+    ).toEqual({ message: '商品が見つかりません。' });
   });
 
   it('combines trimmed name/description keyword search with store filtering', async () => {
