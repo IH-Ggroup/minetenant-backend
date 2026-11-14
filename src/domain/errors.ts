@@ -37,6 +37,10 @@ export function notFound(): never {
   throw new HttpError(404, 'Not Found');
 }
 
+export function productNotFound(): never {
+  throw new HttpError(404, '商品が見つかりません。');
+}
+
 export function selfPurchase(): never {
   const message = '自分が出品した商品は購入できません。';
   throw new HttpError(422, message, {

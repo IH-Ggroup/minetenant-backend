@@ -74,8 +74,8 @@ B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
 | 409    | `OUT_OF_STOCK`            | `status='sold'`（legacyの`stock=0`を含む）         |
 | 422    | `SELF_PURCHASE`           | 出品者本人が自分の商品を購入                       |
 
-入力不正は現行どおり422の`{ "message", "errors" }`、存在しない商品は404の
-`{ "message": "商品が見つかりません。" }`です。上表のエラーは`message`と`code`を必ず返し、
+入力不正は現行どおり422の`{ "message", "errors" }`です。商品詳細GETで存在しない商品を指定した
+場合は404の`{ "message": "商品が見つかりません。" }`です。上表のエラーは`message`と`code`を必ず返し、
 `REQUEST_ID_CONFLICT`と`SELF_PURCHASE`には該当入力の`errors`も返します。
 
 ## 店舗ポイント
