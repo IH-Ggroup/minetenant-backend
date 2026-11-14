@@ -127,7 +127,7 @@ PRをmergeします。#121は途中commitをproductionへdeployせず、次を�
 5. 識別可能な専用smoke userで
    `csrf-cookie -> username register -> me -> logout -> csrf-cookie -> username login`が成功し、その行の
    旧5列がNULLでも新列だけで再loginできることを確認する。legacy email login、legacy register、
-   legacy field、`GET /users`がそれぞれ契約どおり422または404になることも内部経路で確認する。
+   legacy field、削除済みの利用者一覧routeがそれぞれ契約どおり422または404になることも内部経路で確認する。
 6. production APIのruntime code pathと通常testに旧5列reader / writer、legacy serializerが0件で、
    feature gateの設定・参照・testがrepo全体で0件であることを確認する。#109まで残すversioned
    `db:auth-backfill` commandと専用testだけは、旧列readerの期限付きallowlistとする。

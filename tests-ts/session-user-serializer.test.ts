@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   serializeSessionUser,
-  serializeUser,
   SessionUserSerializationError,
 } from '../src/domain/serializers.js';
-import type { SessionUserRow, UserRow } from '../src/domain/types.js';
+import type { SessionUserRow } from '../src/domain/types.js';
 
 const passwordHash = '$2b$12$never-return-this-password-hash';
 
@@ -236,27 +235,5 @@ describe('session user serializer', () => {
         code: 'MINETENANT_AUTH_SESSION_USER_INVALID',
       }),
     );
-  });
-
-  it('does not change the legacy user serializer contract', () => {
-    const legacy: UserRow = {
-      user_id: 'legacy-user-id',
-      name: 'Legacy Name',
-      email: 'legacy@example.test',
-      password: 'legacy-password-hash',
-      role: 'seller',
-      role_label: '出品者デモ',
-      avatar_initial: 'L',
-      store_id: 'legacy-store-id',
-    };
-
-    expect(serializeUser(legacy)).toEqual({
-      id: 'legacy-user-id',
-      name: 'Legacy Name',
-      role: 'seller',
-      roleLabel: '出品者デモ',
-      avatarInitial: 'L',
-      storeId: 'legacy-store-id',
-    });
   });
 });
