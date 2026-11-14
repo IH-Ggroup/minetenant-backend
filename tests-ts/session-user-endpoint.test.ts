@@ -7,7 +7,6 @@ import {
   it,
   vi,
 } from 'vitest';
-import { createApp } from '../src/app.js';
 import {
   createClient,
   createTestApp,
@@ -22,7 +21,7 @@ describe('session user endpoint', () => {
   let passwordHash: string;
 
   beforeAll(async () => {
-    setup = await createTestApp({ usernameAuthEnabled: true });
+    setup = await createTestApp();
   });
 
   beforeEach(async () => {
@@ -37,11 +36,11 @@ describe('session user endpoint', () => {
   });
 
   async function prepareBuyer(): Promise<string> {
-    const [seeded] = await setup.db.query<{ password: string }>(
-      'SELECT password FROM users WHERE user_id = ?',
+    const [seeded] = await setup.db.query<{ password_hash: string }>(
+      'SELECT password_hash FROM users WHERE user_id = ?',
       ['user-buyer'],
     );
-    const passwordHash = seeded!.password;
+    const passwordHash = seeded!.password_hash;
     await setup.db.execute(
       `UPDATE users
           SET username = ?, display_name = ?, password_hash = ?
@@ -63,34 +62,6 @@ describe('session user endpoint', () => {
       200,
     );
   }
-
-  it('uses the final response even when the remaining compatibility gate is false', async () => {
-    const gateFalse = createClient(
-      createApp({
-        db: setup.db,
-        config: { ...setup.config, usernameAuthEnabled: false },
-      }),
-    );
-    await expectStatus(
-      await gateFalse.request('/api/v1/auth/csrf-cookie'),
-      204,
-    );
-    await loginWithUsername(gateFalse);
-
-    const response = await gateFalse.request('/api/v1/auth/me');
-    await expectStatus(response, 200);
-    expect(await response.json()).toEqual({
-      data: {
-        id: 'user-buyer',
-        username: 'demo_user',
-        displayName: '山田 みどり',
-        role: 'buyer',
-        roleLabel: '購入者',
-        avatarInitial: '山',
-        storeId: 'store-yamada',
-      },
-    });
-  });
 
   it('loads the current user by the session userId and returns the final response', async () => {
     await loginWithUsername(client);
