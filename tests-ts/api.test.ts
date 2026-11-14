@@ -279,7 +279,9 @@ describe('Hono API on MySQL', () => {
     expect(
       await body(await guest.request('/api/v1/products/product-lamp'), 404),
     ).toEqual({ message: '商品が見つかりません。' });
+  });
 
+  it('returns an empty Minecraft catalog when no products exist', async () => {
     await test.db.execute('DELETE FROM purchase_transactions');
     await test.db.execute('DELETE FROM products');
     expect(
