@@ -202,7 +202,6 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 | POST   | `/auth/login`                     | 不要           | ログイン、200 `data: User`                                   |
 | GET    | `/auth/me`                        | 必須           | 現在のユーザー、200 `data: User`                             |
 | POST   | `/auth/logout`                    | 必須           | セッション破棄、204                                          |
-| GET    | `/users`                          | 必須           | 現行deprecated一覧、200。#108でrouteごと削除                 |
 | GET    | `/products`                       | 不要           | 商品一覧・検索・店舗絞り込み、200 `data: Product[]`          |
 | GET    | `/products/{productId}`           | 不要           | 商品詳細、200 `data: Product`                                |
 | POST   | `/products`                       | 必須           | 本人の店舗へ冪等に出品、初回201・再送200 `data: Product`     |
@@ -639,7 +638,7 @@ canonical accountとIPの組み合わせごとに毎分5回の制限がありま
 |    5 | Backend #118             | 全API maintenance・catch-up後に#101〜#103 / #119 / #120を同時公開            |
 |    6 | Backend #104 / Front #94 | 非production demo seedを更新し、Frontをusername / displayNameへ切替          |
 |    7 | Backend #105 / #107      | login / me互換削除をmergeするが、単独ではproduction deployしない             |
-|    8 | Backend #108             | `GET /users`削除をmergeするが、単独ではproduction deployしない               |
+|    8 | Backend #108             | 利用者一覧route削除をmergeするが、単独ではproduction deployしない            |
 |    9 | Backend #106             | register互換・gate削除をmergeするが、単独ではproduction deployしない         |
 |   10 | Backend #121             | #105 / #107 / #108 / #106を一つのmaintenance releaseとして同時公開           |
 |   11 | Backend #109             | 旧DB列を削除し、新列をNOT NULL化して完成時schemaを検証                       |
@@ -675,17 +674,16 @@ camelCaseの新field名を返します。#105後のloginで`email`、#106後のr
 `password_confirmation`が一つでも送られた場合は、他のfieldが正しくても422とし、送られた旧field名を
 `errors`へ返します。削除済みfieldをunknown keyとして黙って無視しません。
 
-#105 / #107はlogin / meの旧branchを削除し、#108は`GET /users`を削除しますが、3 PRを単独では
+#105 / #107はlogin / meの旧branchを削除し、#108は利用者一覧routeを削除しますが、3 PRを単独では
 production deployしません。#106がlegacy register、旧列write、最後のfalse branch、config、testを
 削除したcommitまでを[B-AUTH-CONTRACT-CUTOVER #121](https://github.com/IH-Ggroup/minetenant-backend/issues/121)
 が一つのmaintenance releaseとして同時にdeployします。#105だけを先に公開して、
 emailで登録できるのにemailではloginできない中間状態を作りません。#108時点ではregister互換だけが
 既知の旧列accessとして残り、#106でruntime旧列reader / writerを0件にします。
 
-#100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設し、現行`GET /users`が使う
-legacy `serializeUser`を変更しません。#105でlogin、#107でmeの旧`name` adapterを削除済みです。
-#106でregisterのadapterを削除し、他endpointの互換responseを変えません。#108は利用者列挙を
-避けるため`GET /users`と参照・test・docsを削除します。emailと秘密情報は互換期間中もresponseへ返しません。
+#100は完成時User DTOの7 fieldだけを返す`serializeSessionUser`を新設しました。#105でlogin、#107でme、
+#108で利用者一覧routeと共有legacy serializerを削除済みです。registerの旧response変換だけはroute内に
+#106まで限定し、他endpointへ広げません。emailと秘密情報は互換期間中もresponseへ返しません。
 
 password rehashの正本切替、binary CAS、旧新両列の同一transaction更新も
 [`auth-cutover.md`](./auth-cutover.md)を正本とします。loginは#105まで、registerは#106まで片方だけを
@@ -718,7 +716,7 @@ synthetic emailは公開DTO、通常のUI、logへ出しません。synthetic em
 保存済みusernameを取得し、usernameやreal legacy emailと同じcanonical account rate-limit bucketを
 消費します。
 pre-#106 runtimeへの緊急rollbackで必要な場合だけ、operatorがusernameから保存済みemailを検索します。
-#105 / #107をmergeし、#108で`GET /users`を削除して残る旧列accessがregister互換だけであることを
+#105 / #107をmergeし、#108で利用者一覧routeを削除して残る旧列accessがregister互換だけであることを
 確認してから、#106を最後にmergeします。#106はregisterの旧branchと旧列writeに加え、
 `USERNAME_AUTH_ENABLED`のconfig・残ったregister false branch・testを削除し、新requestの旧5列を
 NULLのままにします。runbookの専用smoke userだけはcleanupとNULL残件0件を確認できればrollback可能ですが、
@@ -756,35 +754,6 @@ MineTenant API is running.
 ```
 
 既存Fabric MODの`/callapi`が利用する互換用エンドポイントです。
-
-## 開発用ユーザー一覧
-
-```http
-GET /api/v1/users
-```
-
-ログイン必須です。初期デモユーザーと新規登録したユーザーを含む一覧です。
-この一覧からユーザーIDを選ぶだけでは、ログインや他人としての操作はできません。
-通常の画面では`GET /auth/me`を使って本人を取得してください。
-
-Front / MODに利用箇所がなく、認証済みなら全usernameを列挙できるため、完成時にはBackend #108で
-route・参照・test・このlegacy契約を削除します。auth専用`serializeSessionUser`へ接続しません。
-削除までは次の現行legacy responseだけを維持し、新列やemail、秘密情報を追加しません。
-
-```json
-{
-  "data": [
-    {
-      "id": "user-buyer",
-      "name": "山田 みどり",
-      "role": "buyer",
-      "roleLabel": "購入者デモ",
-      "avatarInitial": "山",
-      "storeId": "store-yamada"
-    }
-  ]
-}
-```
 
 ## 一点物Product
 
