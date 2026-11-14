@@ -237,7 +237,7 @@ catch-upします。
    NULL可へ緩和するが、現行旧writerは引き続き全列へ非NULL値を書く。migrationと同じ共有実装を使う
    versioned `db:auth-backfill -- --mode=<check|apply>`も追加する。backfill検証後に新列をNULL可のまま
    `UNIQUE INDEX users_username_unique (username)`を作成・verifyし、#103以後の同時登録をDBで排他する。
-2. **B-AUTH-02〜06 #99〜#103:** auth専用serializer・login・me・registerをfeature gateの後ろへ追加する。
+2. **B-AUTH-02〜06 #99〜#103:** auth専用serializer・login・me・registerを追加する。
    legacy registerは旧列と新列を同じtransactionで書き、新requestも#106までは決定済み互換値を
    旧列へ書いて、両runtimeで読めるようにする。利用者一覧のlegacy serializerは#108まで維持する。
 3. **B-AUTH-SESSION #119 / B-DB-STRICT-MODE #120:** 必要時だけ匿名sessionを作るmiddleware hardeningと、

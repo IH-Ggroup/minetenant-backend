@@ -27,7 +27,7 @@ describe('username-only login', () => {
   let client: TestClient;
 
   beforeAll(async () => {
-    setup = await createTestApp({ usernameAuthEnabled: true });
+    setup = await createTestApp();
   });
 
   beforeEach(async () => {
@@ -77,32 +77,6 @@ describe('username-only login', () => {
       password,
     });
   }
-
-  it('uses the username contract even when the remaining compatibility gate is false', async () => {
-    const gateFalse = createClient(
-      createApp({
-        db: setup.db,
-        config: { ...setup.config, usernameAuthEnabled: false },
-      }),
-    );
-    await expectStatus(
-      await gateFalse.request('/api/v1/auth/csrf-cookie'),
-      204,
-    );
-    const response = await usernameLogin(gateFalse);
-    await expectStatus(response, 200);
-    expect(await response.json()).toEqual({
-      data: {
-        id: 'user-buyer',
-        username: 'demo_user',
-        displayName: '山田 みどり',
-        role: 'buyer',
-        roleLabel: '購入者',
-        avatarInitial: '山',
-        storeId: 'store-yamada',
-      },
-    });
-  });
 
   it('normalizes username, returns the transitional DTO, and rotates the session', async () => {
     const previousSession = client.cookies.get(setup.config.sessionCookie)!;
@@ -282,7 +256,7 @@ describe('username-only login', () => {
   });
 
   it('rehashes only the canonical password_hash column', async () => {
-    const [before] = await setup.db.query<{ password: string }>(
+    const [before] = await setup.db.query<{ password: string | null }>(
       'SELECT password FROM users WHERE user_id = ?',
       ['user-buyer'],
     );
@@ -298,12 +272,12 @@ describe('username-only login', () => {
 
     await expectStatus(await usernameLogin(stronger), 200);
     const [updated] = await setup.db.query<{
-      password: string;
+      password: string | null;
       password_hash: string;
     }>('SELECT password, password_hash FROM users WHERE user_id = ?', [
       'user-buyer',
     ]);
-    expect(updated!.password).not.toBe(updated!.password_hash);
+    expect(updated!.password).toBeNull();
     expect(updated!.password).toBe(before!.password);
     expect(bcrypt.getRounds(updated!.password_hash)).toBe(6);
     expect(await bcrypt.compare('password', updated!.password_hash)).toBe(true);
