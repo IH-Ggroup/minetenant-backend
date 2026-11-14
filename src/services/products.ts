@@ -67,6 +67,8 @@ export async function createProduct(
       input.requestId,
     );
     if (observed) {
+      // Serialize a replay with purchase and deletion of this exact product so
+      // the response reflects the mutation that actually committed first.
       const [locked] = await tx.query<ProductRow>(
         'SELECT * FROM products WHERE product_id = ? FOR UPDATE',
         [observed.product_id],

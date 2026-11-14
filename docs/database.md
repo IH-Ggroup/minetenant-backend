@@ -361,8 +361,9 @@ MySQL transactionで行います。
 7. Product作成とpoints更新を一緒にcommitする。途中で失敗した場合は両方をrollbackする。
 
 Store行を先にlockするため、同じ店舗から異なる`requestId`で出品が同時実行されても直列化され、
-commitに成功した先着3件だけが加算対象になります。購入処理はProductを先にlockするため、出品処理は
-既存Productを`FOR UPDATE`せず、Store lock取得後の再確認とDB一意制約で同一requestの競合を解決します。
+commitに成功した先着3件だけが加算対象になります。同一requestの再送を最初の検索で見つけた場合は、
+Storeへ触れず対象Productだけを`FOR UPDATE`し、購入・削除と直列化してcommit済みの状態を返します。
+新規出品はStore lock取得後の再確認とDB一意制約で競合を解決します。
 
 #### 購入成立時の2店舗更新
 

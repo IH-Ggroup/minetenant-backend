@@ -906,6 +906,9 @@ X-XSRF-TOKEN: CookieをURLデコードした値
 }
 ```
 
+このendpointはJSON専用です。`application/x-www-form-urlencoded`と`multipart/form-data`は出品形式として
+受け付けません。`price`は文字列ではなくJSON numberで送ります。
+
 `sellerId`と`storeId`はWebセッションの本人とその所有店舗、初期`status`は`available`にAPIが
 固定します。`stock`、`status`、`sellerId`、`storeId`を含む未許可キーは、値にかかわらず422で
 拒否し、無視しません。認証ユーザーの所有店舗が存在しないDB不整合は409
