@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../db.js';
-import { HttpError, notFound, ValidationError } from '../domain/errors.js';
+import {
+  HttpError,
+  notFound,
+  productNotFound,
+  ValidationError,
+} from '../domain/errors.js';
 import type {
   CreateProductInput,
   ProductRow,
@@ -62,18 +67,24 @@ export async function deleteProduct(
       'SELECT * FROM products WHERE product_id = ? FOR UPDATE',
       [productId],
     );
-    if (!product) notFound();
+    if (!product || product.deleted_at !== null) productNotFound();
     if (product.user_id !== userId)
       throw new HttpError(403, 'Only the seller can delete this product.');
+    if (product.status !== 'available')
+      throw new HttpError(409, '売却済みの商品は削除できません。');
     const [transaction] = await tx.query<{ transaction_id: string }>(
       'SELECT transaction_id FROM purchase_transactions WHERE product_id = ? LIMIT 1',
       [productId],
     );
     if (transaction)
-      throw new HttpError(
-        409,
-        'Products with transaction history cannot be deleted.',
-      );
-    await tx.execute('DELETE FROM products WHERE product_id = ?', [productId]);
+      throw new HttpError(409, '売却済みの商品は削除できません。');
+    const result = await tx.execute(
+      `UPDATE products
+        SET deleted_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6)
+        WHERE product_id = ?`,
+      [productId],
+    );
+    if (result.affectedRows !== 1)
+      throw new Error('Product soft delete did not update exactly one row.');
   });
 }
