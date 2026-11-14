@@ -21,19 +21,6 @@ export type PurchaseSource = 'web' | 'minecraft';
 export type Timestamp = string | Date | null;
 export type UserRole = 'buyer' | 'seller';
 
-export interface UserRow {
-  user_id: string;
-  name: string;
-  email: string;
-  password: string;
-  role: UserRole;
-  role_label: string;
-  avatar_initial: string;
-  store_id?: string | null;
-  created_at?: Timestamp;
-  updated_at?: Timestamp;
-}
-
 /** Transitional auth row used only by username-based session endpoints. */
 export interface SessionUserRow {
   user_id: string;
@@ -43,9 +30,6 @@ export interface SessionUserRow {
   role: UserRole;
   store_id: string | null;
 }
-
-/** Transitional row shared by login and the browser session middleware. */
-export type AuthenticatedUserRow = UserRow & SessionUserRow;
 
 /** Public user contract shared by register, login and me. */
 export interface SessionUser {

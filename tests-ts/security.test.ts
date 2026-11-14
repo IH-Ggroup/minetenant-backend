@@ -123,7 +123,6 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
       '/',
       '/up',
       '/api/hello',
-      '/api/v1/users',
       '/api/v1/unknown',
       '/api/v1/minecraft/catalog',
       '/api/v1/minecraft/purchases',
