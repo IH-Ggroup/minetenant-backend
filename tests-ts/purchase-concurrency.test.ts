@@ -73,6 +73,57 @@ describe('atomic MySQL purchases and deletion races', () => {
     );
   }
 
+  async function holdProductRow(productId: string) {
+    let locked!: () => void;
+    let unlock!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const releaseLock = new Promise<void>((resolve) => {
+      unlock = resolve;
+    });
+    const done = test.db.withConnection((connection) =>
+      connection.transaction(async (tx) => {
+        await tx.query(
+          'SELECT product_id FROM products WHERE product_id = ? FOR UPDATE',
+          [productId],
+        );
+        locked();
+        await releaseLock;
+      }),
+    );
+    await lockAcquired;
+    let released = false;
+    return {
+      async release() {
+        if (released) return;
+        released = true;
+        unlock();
+        await done;
+      },
+    };
+  }
+
+  async function waitForProductLockWaiters(
+    productId: string,
+    expected: number,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const processes = await test.db.query<{
+        Info: string | null;
+      }>('SHOW PROCESSLIST');
+      const waiters = processes.filter(
+        ({ Info }) =>
+          Info?.includes('FROM products') && Info.includes(productId),
+      );
+      if (waiters.length >= expected) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(
+      `Timed out waiting for ${expected} product row lock waiter(s).`,
+    );
+  }
+
   it('moves an available product to sold exactly once for simultaneous distinct requests', async () => {
     const responses = await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
@@ -253,39 +304,68 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(await points('store-mine')).toBe(420);
   });
 
-  it('keeps purchase history consistent when purchase and seller deletion race', async () => {
+  it('lets purchase finish first when it waits for the product lock before deletion', async () => {
     const seller = createClient(test.app);
     await expectStatus(await seller.login('seller'), 200);
-    const [bought, deleted] = await Promise.all([
-      purchase('product-hoodie', 'user-buyer', 'delete-race'),
-      seller.json('/api/v1/products/product-hoodie', 'DELETE'),
-    ]);
-    const history = await transactions('delete-race');
-    if (bought.status === 201) {
-      await expectStatus(deleted, 409);
-      expect(await productState('product-hoodie')).toEqual({
-        stock: 0,
-        status: 'sold',
-      });
-      expect(history).toHaveLength(1);
-      expect(await points('store-mine')).toBe(520);
-    } else {
-      await expectStatus(deleted, 204);
-      await expectStatus(bought, 404);
-      expect(await productState('product-hoodie')).toEqual({
-        stock: 1,
-        status: 'available',
-      });
-      const [product] = await test.db.query<{
-        deleted_at: Date | string | null;
-      }>(
-        `SELECT deleted_at FROM products
-          WHERE product_id = 'product-hoodie'`,
+    const held = await holdProductRow('product-hoodie');
+    try {
+      const bought = purchase(
+        'product-hoodie',
+        'user-buyer',
+        'purchase-first-race',
       );
-      expect(product?.deleted_at).not.toBeNull();
-      expect(history).toHaveLength(0);
-      expect(await points('store-mine')).toBe(420);
+      await waitForProductLockWaiters('product-hoodie', 1);
+      const deleted = seller.json('/api/v1/products/product-hoodie', 'DELETE');
+      await waitForProductLockWaiters('product-hoodie', 2);
+      await held.release();
+
+      await expectStatus(await bought, 201);
+      await expectStatus(await deleted, 409);
+    } finally {
+      await held.release();
     }
+    expect(await productState('product-hoodie')).toEqual({
+      stock: 0,
+      status: 'sold',
+    });
+    expect(await transactions('purchase-first-race')).toHaveLength(1);
+    expect(await points('store-mine')).toBe(520);
+    expect(await transactions('request-demo')).toHaveLength(1);
+  });
+
+  it('lets deletion finish first when it waits for the product lock before purchase', async () => {
+    const seller = createClient(test.app);
+    await expectStatus(await seller.login('seller'), 200);
+    const held = await holdProductRow('product-hoodie');
+    try {
+      const deleted = seller.json('/api/v1/products/product-hoodie', 'DELETE');
+      await waitForProductLockWaiters('product-hoodie', 1);
+      const bought = purchase(
+        'product-hoodie',
+        'user-buyer',
+        'deletion-first-race',
+      );
+      await waitForProductLockWaiters('product-hoodie', 2);
+      await held.release();
+
+      await expectStatus(await deleted, 204);
+      await expectStatus(await bought, 404);
+    } finally {
+      await held.release();
+    }
+    expect(await productState('product-hoodie')).toEqual({
+      stock: 1,
+      status: 'available',
+    });
+    const [product] = await test.db.query<{
+      deleted_at: Date | string | null;
+    }>(
+      `SELECT deleted_at FROM products
+        WHERE product_id = 'product-hoodie'`,
+    );
+    expect(product?.deleted_at).not.toBeNull();
+    expect(await transactions('deletion-first-race')).toHaveLength(0);
+    expect(await points('store-mine')).toBe(420);
     expect(await transactions('request-demo')).toHaveLength(1);
   });
 });
