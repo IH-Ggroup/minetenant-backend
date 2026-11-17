@@ -6,7 +6,7 @@ export interface PublicProductFilters {
   readonly keyword?: string;
 }
 
-const publicProductPredicates = [
+export const publicProductPredicates = [
   'deleted_at IS NULL',
   "BINARY status IN ('available', 'sold')",
 ] as const;
