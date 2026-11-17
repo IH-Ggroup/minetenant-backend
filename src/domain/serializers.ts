@@ -67,13 +67,13 @@ export function serializeProduct(product: ProductRow) {
   };
 }
 
-export function serializeStore(store: StoreRow) {
+export function serializeStore(store: StoreRow, level: number) {
   return {
     id: store.store_id,
     ownerId: store.user_id,
     name: store.name,
     description: store.description,
-    level: Number(store.level),
+    level,
     points: Number(store.points),
     syncStatus: store.sync_status,
   };

@@ -6,7 +6,7 @@ import {
 } from '../domain/serializers.js';
 import type { ProductRow, StoreRow, TransactionRow } from '../domain/types.js';
 import { publicProductPredicates } from './public-products.js';
-import { growthProgress } from './store-growth.js';
+import { growthProgress, levelForPoints } from './store-growth.js';
 
 export async function getStoreDashboard(db: Database, store: StoreRow) {
   const [products, transactions] = await Promise.all([
@@ -24,8 +24,9 @@ export async function getStoreDashboard(db: Database, store: StoreRow) {
   const availableProductCount = products.filter(
     (product) => product.status === 'available',
   ).length;
+  const points = Number(store.points);
   return {
-    store: serializeStore(store),
+    store: serializeStore(store, levelForPoints(points)),
     products: products.map(serializeProduct),
     stats: {
       productCount: products.length,
@@ -45,7 +46,7 @@ export async function getStoreDashboard(db: Database, store: StoreRow) {
       minecraftSalesCount: transactions.filter(
         (transaction) => transaction.source === 'minecraft',
       ).length,
-      ...growthProgress(Number(store.level), Number(store.points)),
+      ...growthProgress(points),
     },
     recentTransactions: transactions.slice(0, 5).map(serializeTransaction),
   };
