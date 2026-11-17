@@ -40,13 +40,25 @@ async function findRequest(
   return transaction;
 }
 
+async function withCanonicalProductId(
+  db: SqlExecutor,
+  input: PurchaseInput,
+): Promise<PurchaseInput> {
+  const [product] = await db.query<{ product_id: string }>(
+    'SELECT product_id FROM products WHERE product_id = ?',
+    [input.productId],
+  );
+  return product ? { ...input, productId: product.product_id } : input;
+}
+
 /** Replay a saved purchase without creating a new transaction. */
 export async function replayPurchase(
   db: SqlExecutor,
   input: PurchaseInput,
 ): Promise<TransactionRow | undefined> {
   const transaction = await findRequest(db, input.requestId);
-  if (transaction) ensureSamePurchase(transaction, input);
+  if (transaction)
+    ensureSamePurchase(transaction, await withCanonicalProductId(db, input));
   return transaction;
 }
 
@@ -59,7 +71,7 @@ export async function purchase(
     return await db.transaction(async (tx) => {
       const existing = await findRequest(tx, input.requestId, true);
       if (existing) {
-        ensureSamePurchase(existing, input);
+        ensureSamePurchase(existing, await withCanonicalProductId(tx, input));
         return { transaction: existing, created: false };
       }
 
@@ -68,12 +80,13 @@ export async function purchase(
         [input.productId],
       );
       if (!product || product.deleted_at !== null) productNotFound();
+      const canonicalInput = { ...input, productId: product.product_id };
 
       // A competing retry may have committed while this request waited for the
       // product lock. Replay it before deciding the last item is sold out.
       const committed = await findRequest(tx, input.requestId, true);
       if (committed) {
-        ensureSamePurchase(committed, input);
+        ensureSamePurchase(committed, canonicalInput);
         return { transaction: committed, created: false };
       }
 
@@ -128,9 +141,8 @@ export async function purchase(
       !sqlError.message?.toLowerCase().includes('request_id')
     )
       throw error;
-    const existing = await findRequest(db, input.requestId);
+    const existing = await replayPurchase(db, input);
     if (!existing) throw error;
-    ensureSamePurchase(existing, input);
     return { transaction: existing, created: false };
   }
 }

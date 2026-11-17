@@ -132,11 +132,20 @@ describe('Web purchase API', () => {
   });
 
   it('validates new request IDs without changing their raw value', async () => {
+    const tooLongNewId = await body(
+      await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
+        requestId: 'a'.repeat(101),
+      }),
+      422,
+    );
+    expect(tooLongNewId.errors.requestId).toEqual([
+      '新しい購入リクエストIDは英数字と._:-のみを使い、100文字以内で指定してください。',
+    ]);
+
     for (const requestId of [
       ' request-with-space',
       'request-with-space ',
       '購入-request',
-      'a'.repeat(101),
       'a'.repeat(256),
     ]) {
       const invalid = await body(
@@ -184,6 +193,38 @@ describe('Web purchase API', () => {
       409,
     );
     expect(conflict.code).toBe('REQUEST_ID_CONFLICT');
+  });
+
+  it('checks requestId conflicts before product existence and state', async () => {
+    const requestId = 'conflict-before-product-state';
+    await expectStatus(
+      await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
+        requestId,
+      }),
+      201,
+    );
+    await expectStatus(
+      await buyer.json('/api/v1/products/product-lamp', 'DELETE'),
+      204,
+    );
+
+    const conflicts = [
+      buyer.json('/api/v1/products/missing/purchases', 'POST', { requestId }),
+      buyer.json('/api/v1/products/product-lamp/purchases', 'POST', {
+        requestId,
+      }),
+      buyer.json('/api/v1/products/product-pendant/purchases', 'POST', {
+        requestId,
+      }),
+      buyer.json('/api/v1/purchases', 'POST', {
+        productId: 'product-pendant',
+        requestId,
+      }),
+    ];
+    for (const response of await Promise.all(conflicts)) {
+      const conflict = await body(response, 409);
+      expect(conflict.code).toBe('REQUEST_ID_CONFLICT');
+    }
   });
 
   it('requires a session and a matching CSRF token', async () => {
@@ -236,6 +277,7 @@ describe('Web purchase API', () => {
       await seller.json('/api/v1/products/product-hoodie', 'DELETE'),
       204,
     );
+    // A fresh request ID still reports a soft-deleted product as not found.
     await expectStatus(
       await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
         requestId: 'deleted-product',
