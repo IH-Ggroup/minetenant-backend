@@ -651,7 +651,7 @@ describe('Hono API on MySQL', () => {
     });
   });
 
-  it('purchases one available item, adds 100 store points and marks it sold', async () => {
+  it('purchases one available item, rewards both stores and marks it sold', async () => {
     const result = await body(
       await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
         requestId: 'web-purchase',
@@ -685,6 +685,9 @@ describe('Hono API on MySQL', () => {
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data,
     ).toMatchObject({ points: 520, level: 3 });
+    expect(
+      (await body(await guest.request('/api/v1/stores/store-yamada'))).data,
+    ).toMatchObject({ points: 90, level: 1 });
   });
 
   it('uses session defaults and deduplicates retries across both web purchase URLs', async () => {
@@ -718,6 +721,10 @@ describe('Hono API on MySQL', () => {
       (await body(await guest.request('/api/v1/stores/store-mine'))).data
         .points,
     ).toBe(520);
+    expect(
+      (await body(await guest.request('/api/v1/stores/store-yamada'))).data
+        .points,
+    ).toBe(90);
     expect(
       (await body(await buyer.request('/api/v1/transactions'))).data,
     ).toHaveLength(2);
@@ -792,6 +799,10 @@ describe('Hono API on MySQL', () => {
       (await body(await guest.request('/api/v1/stores/store-mine'))).data
         .points,
     ).toBe(420);
+    expect(
+      (await body(await guest.request('/api/v1/stores/store-yamada'))).data
+        .points,
+    ).toBe(40);
   });
 
   it('validates purchase aliases, identities, source and request IDs', async () => {
@@ -879,6 +890,9 @@ describe('Hono API on MySQL', () => {
     expect(
       (await body(await guest.request('/api/v1/stores/store-mine'))).data,
     ).toMatchObject({ points: 520, level: 3 });
+    expect(
+      (await body(await guest.request('/api/v1/stores/store-yamada'))).data,
+    ).toMatchObject({ points: 90, level: 1 });
     const wrongSource = await body(
       await guest.json('/api/v1/minecraft/purchases', 'POST', {
         ...payload,
