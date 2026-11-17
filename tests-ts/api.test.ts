@@ -654,8 +654,6 @@ describe('Hono API on MySQL', () => {
   it('purchases one available item, adds 100 store points and marks it sold', async () => {
     const result = await body(
       await buyer.json('/api/v1/products/product-hoodie/purchases', 'POST', {
-        buyerId: 'user-buyer',
-        source: 'web',
         requestId: 'web-purchase',
       }),
       201,
