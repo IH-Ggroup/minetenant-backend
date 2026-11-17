@@ -73,7 +73,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     );
   }
 
-  it('sells the last item exactly once to simultaneous distinct requests', async () => {
+  it('moves an available product to sold exactly once for simultaneous distinct requests', async () => {
     const responses = await Promise.all(
       Array.from({ length: 8 }, (_, index) =>
         purchase('product-toolbag', 'user-seller', `last-stock-${index}`),
@@ -96,7 +96,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(await transactions()).toHaveLength(2);
   });
 
-  it('deduplicates simultaneous retries even when the first request consumes the last item', async () => {
+  it('deduplicates simultaneous retries when the first request sells the product', async () => {
     const responses = await Promise.all(
       Array.from({ length: 8 }, () =>
         purchase('product-toolbag', 'user-seller', 'concurrent-retry'),
@@ -166,8 +166,8 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(await transactions()).toHaveLength(3);
   });
 
-  it('rolls stock, transaction and store growth back when the transaction insert fails', async () => {
-    // A real SQL failure after the stock update verifies the actual transaction boundary.
+  it('rolls product status, transaction and store growth back when the transaction insert fails', async () => {
+    // A real SQL failure after the status update verifies the actual transaction boundary.
     // The trigger exists only in the explicitly guarded disposable test database.
     await test.db.execute(`
       CREATE TRIGGER hono_test_fail_purchase BEFORE INSERT ON purchase_transactions
@@ -205,7 +205,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(await points('store-mine')).toBe(520);
   });
 
-  it('rolls back the inserted transaction and stock when store growth fails', async () => {
+  it('rolls back the inserted transaction and product status when store growth fails', async () => {
     await test.db.execute(`
       CREATE TRIGGER hono_test_fail_growth BEFORE UPDATE ON stores
       FOR EACH ROW BEGIN
@@ -228,6 +228,29 @@ describe('atomic MySQL purchases and deletion races', () => {
     } finally {
       await test.db.execute('DROP TRIGGER hono_test_fail_growth');
     }
+  });
+
+  it('returns 404 without side effects for a soft-deleted product', async () => {
+    await test.db.execute(
+      `UPDATE products SET deleted_at = UTC_TIMESTAMP(6)
+        WHERE product_id = 'product-hoodie'`,
+    );
+
+    const response = await purchase(
+      'product-hoodie',
+      'user-buyer',
+      'deleted-product',
+    );
+    await expectStatus(response, 404);
+    expect(await response.json()).toEqual({
+      message: '商品が見つかりません。',
+    });
+    expect(await productState('product-hoodie')).toEqual({
+      stock: 1,
+      status: 'available',
+    });
+    expect(await transactions('deleted-product')).toHaveLength(0);
+    expect(await points('store-mine')).toBe(420);
   });
 
   it('keeps purchase history consistent when purchase and seller deletion race', async () => {
