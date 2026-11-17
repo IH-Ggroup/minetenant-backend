@@ -40,6 +40,16 @@ async function findRequest(
   return transaction;
 }
 
+/** Replay a saved purchase without creating a new transaction. */
+export async function replayPurchase(
+  db: SqlExecutor,
+  input: PurchaseInput,
+): Promise<TransactionRow | undefined> {
+  const transaction = await findRequest(db, input.requestId);
+  if (transaction) ensureSamePurchase(transaction, input);
+  return transaction;
+}
+
 export async function purchase(
   db: Database,
   input: PurchaseInput,
