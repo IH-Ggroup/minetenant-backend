@@ -1,7 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
-import { productNotFound, purchaseResultNotFound } from '../domain/errors.js';
+import { purchaseResultNotFound } from '../domain/errors.js';
 import {
   serializeProduct,
   serializeTransaction,
@@ -64,14 +64,8 @@ export function createPurchaseRoutes(
     validator.throwIfInvalid();
 
     const requestedProductId = routeProductId ?? bodyProductId!;
-    const [product] = await db.query<{
-      product_id: string;
-      deleted_at: string | Date | null;
-    }>('SELECT product_id, deleted_at FROM products WHERE product_id = ?', [
-      requestedProductId,
-    ]);
     const input = {
-      productId: product?.product_id ?? requestedProductId,
+      productId: requestedProductId,
       buyerId: userId,
       source: 'web' as const,
       requestId: requestId!,
@@ -81,11 +75,13 @@ export function createPurchaseRoutes(
       const transaction = await replayPurchase(db, input);
       if (transaction)
         return c.json({ data: serializeTransaction(transaction) }, 200);
-      validator.add('requestId', '購入リクエストIDの形式が正しくありません。');
+      validator.add(
+        'requestId',
+        '新しい購入リクエストIDは英数字と._:-のみを使い、100文字以内で指定してください。',
+      );
       validator.throwIfInvalid();
     }
 
-    if (!product || product.deleted_at !== null) productNotFound();
     const result = await purchase(db, input, config.salePoints);
     return c.json(
       { data: serializeTransaction(result.transaction) },
