@@ -62,3 +62,27 @@ export function requestIdConflict(): never {
     errors: { requestId: [message] },
   });
 }
+
+export function listingRequestIdConflict(): never {
+  const message = '同じrequestIdが別の出品内容ですでに使用されています。';
+  throw new HttpError(409, message, {
+    code: 'REQUEST_ID_CONFLICT',
+    errors: {
+      requestId: ['別の出品操作には新しいrequestIdを使用してください。'],
+    },
+  });
+}
+
+export function listingRequestRetired(): never {
+  throw new HttpError(
+    409,
+    'このrequestIdで作成した商品は削除済みです。新しい出品操作を開始してください。',
+    { code: 'LISTING_REQUEST_RETIRED' },
+  );
+}
+
+export function userStoreNotReady(): never {
+  throw new HttpError(409, '出品できる店舗が準備されていません。', {
+    code: 'USER_STORE_NOT_READY',
+  });
+}

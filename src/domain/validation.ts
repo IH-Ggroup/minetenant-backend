@@ -10,34 +10,46 @@ const trimEdges = new RegExp(
   'gu',
 );
 
-function normalize(value: unknown, field = ''): unknown {
+function normalize(
+  value: unknown,
+  field = '',
+  preserveStrings: ReadonlySet<string> = new Set(),
+): unknown {
   if (typeof value === 'string') {
-    const cleaned = [
-      'password',
-      'password_confirmation',
-      'current_password',
-    ].includes(field)
-      ? value
-      : value.replace(trimEdges, '');
+    const cleaned =
+      ['password', 'password_confirmation', 'current_password'].includes(
+        field,
+      ) || preserveStrings.has(field)
+        ? value
+        : value.replace(trimEdges, '');
     return cleaned === '' ? null : cleaned;
   }
   if (Array.isArray(value))
-    return value.map((entry) => normalize(entry, field));
+    return value.map((entry) => normalize(entry, field, preserveStrings));
   if (value instanceof Blob) return value;
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, normalize(entry, key)]),
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        normalize(entry, key, preserveStrings),
+      ]),
     );
   }
   return value;
 }
 
 /** Apply the legacy body normalization to an already parsed input object. */
-export function normalizeInput(input: Input): Input {
-  return normalize(input) as Input;
+export function normalizeInput(
+  input: Input,
+  preserveStrings: readonly string[] = [],
+): Input {
+  return normalize(input, '', new Set(preserveStrings)) as Input;
 }
 
-function parseFormEntries(entries: Iterable<[string, unknown]>): Input {
+function parseFormEntries(
+  entries: Iterable<[string, unknown]>,
+  preserveStrings: readonly string[] = [],
+): Input {
   const input: Input = Object.create(null) as Input;
   for (const [rawKey, value] of entries) {
     const key = rawKey.split('\0', 1)[0]!.replace(/^ +/, '');
@@ -50,14 +62,17 @@ function parseFormEntries(entries: Iterable<[string, unknown]>): Input {
     ).replace(/[ .]/g, '_');
     if (name !== '') input[name] = array ? [value] : value;
   }
-  return normalizeInput(input);
+  return normalizeInput(input, preserveStrings);
 }
 
 export function parseQuery(url: string): Input {
   return parseFormEntries(new URL(url).searchParams);
 }
 
-export async function parseBody(request: Request): Promise<Input> {
+export async function parseBody(
+  request: Request,
+  options: { preserveStrings?: readonly string[] } = {},
+): Promise<Input> {
   const contentType = request.headers.get('content-type') ?? '';
   let body: unknown;
   if (
@@ -71,10 +86,16 @@ export async function parseBody(request: Request): Promise<Input> {
       throw new HttpError(400, 'Invalid JSON.');
     }
   } else if (contentType.includes('application/x-www-form-urlencoded')) {
-    return parseQuery(`http://localhost/?${await request.text()}`);
+    return parseFormEntries(
+      new URLSearchParams(await request.text()),
+      options.preserveStrings,
+    );
   } else if (contentType.includes('multipart/form-data')) {
     try {
-      return parseFormEntries(await request.formData());
+      return parseFormEntries(
+        await request.formData(),
+        options.preserveStrings,
+      );
     } catch {
       throw new HttpError(400, 'Invalid request body.');
     }
@@ -83,7 +104,7 @@ export async function parseBody(request: Request): Promise<Input> {
   }
   if (body === null || typeof body !== 'object' || Array.isArray(body))
     return {};
-  return normalizeInput(body as Input);
+  return normalizeInput(body as Input, options.preserveStrings);
 }
 
 export async function parseJsonBody(request: Request): Promise<Input> {
@@ -206,18 +227,26 @@ export class Validator {
 
   integer(
     field: string,
-    options: CommonOptions & { min?: number; max?: number } = {},
+    options: CommonOptions & {
+      min?: number;
+      max?: number;
+      strictNumber?: boolean;
+    } = {},
   ): number | undefined {
     if (this.absent(field, options)) return undefined;
     const value = this.data[field];
     // Accept canonical signed integer strings (including +1), but reject
     // decimals and strings with leading zeroes.
     const numeric =
-      typeof value === 'number' || value === true
-        ? Number(value)
-        : typeof value === 'string' && /^[+-]?(?:0|[1-9]\d*)$/.test(value)
+      options.strictNumber === true
+        ? typeof value === 'number'
+          ? value
+          : NaN
+        : typeof value === 'number' || value === true
           ? Number(value)
-          : NaN;
+          : typeof value === 'string' && /^[+-]?(?:0|[1-9]\d*)$/.test(value)
+            ? Number(value)
+            : NaN;
     if (!Number.isSafeInteger(numeric)) {
       this.add(
         field,
