@@ -1,14 +1,18 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
-import { productNotFound } from '../domain/errors.js';
+import { productNotFound, purchaseResultNotFound } from '../domain/errors.js';
 import {
   serializeProduct,
   serializeTransaction,
 } from '../domain/serializers.js';
 import { parseBody, Validator } from '../domain/validation.js';
 import { listPublicProducts } from '../services/public-products.js';
-import { purchase, replayPurchase } from '../services/purchases.js';
+import {
+  findPurchaseResult,
+  purchase,
+  replayPurchase,
+} from '../services/purchases.js';
 import type { AppEnv } from '../types.js';
 
 const purchaseRequestIdPattern = /^[A-Za-z0-9._:-]{1,100}$/;
@@ -93,6 +97,15 @@ export function createPurchaseRoutes(
   routes.post('/products/:product/purchases', requireAuth, (c) =>
     webPurchase(c, c.req.param('product')),
   );
+  routes.get('/purchases/requests/:requestId', requireAuth, async (c) => {
+    const transaction = await findPurchaseResult(
+      db,
+      c.req.param('requestId'),
+      c.get('user')!.user_id,
+    );
+    if (!transaction) purchaseResultNotFound();
+    return c.json({ data: serializeTransaction(transaction) });
+  });
 
   routes.get('/minecraft/catalog', async (c) => {
     const products = await listPublicProducts(db);
