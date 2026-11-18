@@ -86,3 +86,9 @@ export function userStoreNotReady(): never {
     code: 'USER_STORE_NOT_READY',
   });
 }
+
+export function purchaseStoreNotReady(): never {
+  throw new HttpError(409, '購入に必要な店舗が準備されていません。', {
+    code: 'USER_STORE_NOT_READY',
+  });
+}
