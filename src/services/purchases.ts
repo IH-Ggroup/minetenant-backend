@@ -62,6 +62,19 @@ export async function replayPurchase(
   return transaction;
 }
 
+export async function findPurchaseResult(
+  db: SqlExecutor,
+  requestId: string,
+  buyerId: string,
+): Promise<TransactionRow | undefined> {
+  const [transaction] = await db.query<TransactionRow>(
+    `SELECT * FROM purchase_transactions
+      WHERE request_id = ? AND buyer_user_id = ?`,
+    [requestId, buyerId],
+  );
+  return transaction;
+}
+
 export async function purchase(
   db: Database,
   input: PurchaseInput,

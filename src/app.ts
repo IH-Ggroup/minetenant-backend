@@ -73,7 +73,7 @@ export function createApp({
       }
       const path = c.req.path;
       if (
-        !/^\/api\/v1\/(?:auth\/(?:csrf-cookie|register|login|me|logout)|products(?:\/.*)?|stores\/.+|purchases|transactions(?:\/.*)?)$/.test(
+        !/^\/api\/v1\/(?:auth\/(?:csrf-cookie|register|login|me|logout)|products(?:\/.*)?|stores\/.+|purchases(?:\/requests\/[^/]+)?|transactions(?:\/.*)?)$/.test(
           path,
         )
       ) {

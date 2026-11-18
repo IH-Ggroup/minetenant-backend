@@ -205,6 +205,7 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 | DELETE | `/products/{productId}`           | 必須           | 本人の未取引商品の削除、204                                  |
 | POST   | `/purchases`                      | 必須           | 本文に商品IDを指定して購入、201または200 `data: Transaction` |
 | POST   | `/products/{productId}/purchases` | 必須           | URLに商品IDを指定して購入、201または200 `data: Transaction`  |
+| GET    | `/purchases/requests/{requestId}` | 購入者本人のみ | requestIdから購入結果を照会、200 `data: Transaction`         |
 | GET    | `/stores/{storeId}`               | 不要           | 公開店舗情報、200 `data: Store`                              |
 | GET    | `/stores/{storeId}/growth`        | 不要           | 公開店舗成長情報、200 `data: StoreGrowth`                    |
 | GET    | `/stores/{storeId}/dashboard`     | 所有者のみ     | 店舗集計、200 `data: Dashboard`                              |
@@ -1087,6 +1088,27 @@ WebとMinecraftが別の`requestId`で同じ商品を同時購入しても、成
 返るのは取引情報です。フロントの`{ ok, transactionId }`形式ではありません。`data.id`が購入完了
 画面へ渡す取引IDです。最新の状態は購入成功後に商品詳細をもう一度GETして表示します。実際の決済・
 配送処理は行いません。
+
+## Web購入結果照会
+
+購入POSTのresponseを受け取れなかった場合は、同じ`requestId`をURL encodeして結果を照会します。
+GETのためCSRF headerは不要ですが、購入時と同じユーザーのCookie sessionが必要です。
+
+```http
+GET /api/v1/purchases/requests/3cb3f539-01ee-4f38-8f85-f1f0862755e1
+```
+
+本人の購入が成立済みなら、購入POSTの再送と同じTransaction DTOを200で返します。このGETは
+Product、Transaction、店舗pointsを更新せず、何度照会しても追加購入やpoints再加算を行いません。
+
+存在しない`requestId`と、別ユーザーが購入した`requestId`は区別せず、どちらも次の404を返します。
+このresponseから他人の購入有無は判定できません。
+
+```json
+{
+  "message": "購入結果が見つかりません。"
+}
+```
 
 ## 店舗
 
