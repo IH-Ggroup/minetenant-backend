@@ -982,6 +982,8 @@ describe('Hono API on MySQL', () => {
       minecraftSalesCount: 1,
       nextLevelPoints: 180,
       levelProgressPercent: 40,
+      maxLevel: 5,
+      isMaxLevel: false,
     });
     expect(dashboard.data.recentTransactions).toHaveLength(1);
     expect(dashboard.data.recentTransactions[0].id).toBe('transaction-demo');
