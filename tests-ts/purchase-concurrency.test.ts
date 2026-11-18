@@ -233,6 +233,34 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(await transactions()).toHaveLength(3);
   });
 
+  it('returns USER_STORE_NOT_READY and rolls back when the buyer has no store', async () => {
+    await test.db.execute(`INSERT INTO users
+      (user_id, role, username, display_name, password_hash,
+       created_at, updated_at)
+      SELECT 'user-without-store', 'buyer', 'buyer_without_store',
+             '店舗なし購入者', password_hash, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+        FROM users
+       WHERE user_id = 'user-buyer'`);
+
+    const response = await purchase(
+      'product-hoodie',
+      'user-without-store',
+      'buyer-store-missing',
+    );
+
+    await expectStatus(response, 409);
+    expect(await response.json()).toEqual({
+      message: '購入に必要な店舗が準備されていません。',
+      code: 'USER_STORE_NOT_READY',
+    });
+    expect(await productState('product-hoodie')).toEqual({
+      stock: 1,
+      status: 'available',
+    });
+    expect(await transactions('buyer-store-missing')).toHaveLength(0);
+    expect(await points('store-mine')).toBe(420);
+  });
+
   it('rolls product status, transaction and store growth back when the transaction insert fails', async () => {
     // A real SQL failure after the status update verifies the actual transaction boundary.
     // The trigger exists only in the explicitly guarded disposable test database.

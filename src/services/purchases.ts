@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { Database, SqlExecutor } from '../db.js';
 import {
-  notFound,
   outOfStock,
   productNotFound,
+  purchaseStoreNotReady,
   requestIdConflict,
   selfPurchase,
 } from '../domain/errors.js';
@@ -27,7 +27,7 @@ async function lockPurchaseStores(
     'SELECT store_id FROM stores WHERE user_id = ?',
     [buyerId],
   );
-  if (!buyerReference) notFound();
+  if (!buyerReference) purchaseStoreNotReady();
 
   const locked: StoreRow[] = [];
   // Every purchase uses the same order even when buyer and seller are reversed
@@ -38,7 +38,7 @@ async function lockPurchaseStores(
       'SELECT * FROM stores WHERE store_id = ? FOR UPDATE',
       [storeId],
     );
-    if (!store) notFound();
+    if (!store) purchaseStoreNotReady();
     locked.push(store);
   }
 
@@ -50,7 +50,8 @@ async function lockPurchaseStores(
     (store) =>
       store.store_id === product.store_id && store.user_id === product.user_id,
   );
-  if (!buyer || !seller || buyer.store_id === seller.store_id) notFound();
+  if (!buyer || !seller || buyer.store_id === seller.store_id)
+    purchaseStoreNotReady();
   return { buyer, seller, locked };
 }
 

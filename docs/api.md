@@ -70,7 +70,7 @@ B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
 | ------ | ------------------------- | -------------------------------------------------- |
 | 409    | `REQUEST_ID_CONFLICT`     | 同じ出品・購入`requestId`を異なる内容へ再利用      |
 | 409    | `LISTING_REQUEST_RETIRED` | soft delete済み商品の出品`requestId`を同内容で再送 |
-| 409    | `USER_STORE_NOT_READY`    | 認証ユーザーの所有店舗が存在しない                 |
+| 409    | `USER_STORE_NOT_READY`    | 出品・購入に必要な所有店舗が存在しない             |
 | 409    | `OUT_OF_STOCK`            | `status='sold'`（legacyの`stock=0`を含む）         |
 | 422    | `SELF_PURCHASE`           | 出品者本人が自分の商品を購入                       |
 
@@ -1021,7 +1021,8 @@ GETするとIDや価格を保ったまま次の状態です。
 
 初回の購入成立時だけ、buyerが所有する店舗へ50 points、Productの販売店舗へ100 pointsを加算します。
 両店舗の加算はProductの`sold`化とTransaction作成と同じDB transactionで行い、片方でも更新できない
-場合は購入全体をrollbackします。
+場合は購入全体をrollbackします。購入者または販売者の店舗が存在しないDB不整合では409
+`USER_STORE_NOT_READY`を返し、Product・Transaction・店舗pointsを変更しません。
 
 ```json
 {
