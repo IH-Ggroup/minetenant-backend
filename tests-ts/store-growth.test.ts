@@ -77,6 +77,22 @@ describe('store growth calculation', () => {
         expect(progress.levelProgressPercent).toBeLessThan(100);
     }
   });
+
+  it('calculates the exact contracted percentage for every non-max point', () => {
+    for (let points = 0; points < 1000; points += 1) {
+      const nextThresholdIndex = STORE_LEVEL_THRESHOLDS.findIndex(
+        (threshold) => threshold > points,
+      );
+      const currentThreshold = STORE_LEVEL_THRESHOLDS[nextThresholdIndex - 1]!;
+      const nextThreshold = STORE_LEVEL_THRESHOLDS[nextThresholdIndex]!;
+      const expected = Math.floor(
+        ((points - currentThreshold) * 100) /
+          (nextThreshold - currentThreshold),
+      );
+
+      expect(growthProgress(points).levelProgressPercent).toBe(expected);
+    }
+  });
 });
 
 describe('store API growth display', () => {
