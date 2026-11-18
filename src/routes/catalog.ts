@@ -5,6 +5,7 @@ import { HttpError, notFound, productNotFound } from '../domain/errors.js';
 import {
   serializeProduct,
   serializeStore,
+  serializeStoreGrowth,
   serializeTransaction,
 } from '../domain/serializers.js';
 import {
@@ -22,7 +23,7 @@ import {
   listPublicProducts,
 } from '../services/public-products.js';
 import { getStoreDashboard } from '../services/store-dashboard.js';
-import { levelForPoints } from '../services/store-growth.js';
+import { levelForPoints, storeGrowthState } from '../services/store-growth.js';
 import type { AppEnv } from '../types.js';
 
 export function createCatalogRoutes(
@@ -155,6 +156,20 @@ export function createCatalogRoutes(
     if (!store) notFound();
     return c.json({
       data: serializeStore(store, levelForPoints(Number(store.points))),
+    });
+  });
+
+  routes.get('/stores/:store/growth', async (c) => {
+    const [store] = await db.query<StoreRow>(
+      'SELECT * FROM stores WHERE store_id = ?',
+      [c.req.param('store')],
+    );
+    if (!store) notFound();
+    return c.json({
+      data: serializeStoreGrowth(
+        store.store_id,
+        storeGrowthState(Number(store.points)),
+      ),
     });
   });
 
