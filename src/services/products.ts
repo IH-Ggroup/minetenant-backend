@@ -31,7 +31,7 @@ async function listingClock(db: SqlExecutor): Promise<ListingClockRow> {
               - INTERVAL 9 HOUR AS day_start,
             TIMESTAMP(DATE(listing_created_at + INTERVAL 9 HOUR)
               + INTERVAL 1 DAY) - INTERVAL 9 HOUR AS next_day_start
-       FROM (SELECT UTC_TIMESTAMP(6) AS listing_created_at) AS listing_clock`,
+       FROM (SELECT UTC_TIMESTAMP() AS listing_created_at) AS listing_clock`,
   );
   if (!clock?.created_at || !clock.day_start || !clock.next_day_start)
     throw new Error('The database did not return a listing clock.');

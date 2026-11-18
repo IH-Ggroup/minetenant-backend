@@ -84,6 +84,9 @@ describe('idempotent single-item listings', () => {
       listing_request_fingerprint:
         'adcbef587d9dea01e55944817c427fe41328abc42edaa097ef3a8b7ceddfa4ce',
     });
+    expect(rows[0]?.created_at).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    );
     expect(await storeGrowth()).toEqual({ points: 430, level: 3 });
   });
 
