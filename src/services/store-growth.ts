@@ -33,7 +33,7 @@ export function growthProgress(points: number) {
   return {
     nextLevelPoints: nextThreshold - points,
     levelProgressPercent: Math.floor(
-      ((points - currentThreshold) / (nextThreshold - currentThreshold)) * 100,
+      ((points - currentThreshold) * 100) / (nextThreshold - currentThreshold),
     ),
     maxLevel: MAX_STORE_LEVEL,
     isMaxLevel,
