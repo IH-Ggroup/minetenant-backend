@@ -1,23 +1,25 @@
 # MineTenant API v1
 
-開発URLは`http://localhost:8787`です。バックエンドはNode.js上のTypeScript / Honoで
-動作し、MySQLへデータを保存します。JSONのキーはフロントのTypeScript型に合わせて
-camelCaseで返します。
+開発環境のURLは`http://localhost:8787`です。APIはJSONを使い、項目名は`camelCase`です。
 
-> **契約節の読み方**
-> 「現行から確定契約への変更」と「一点物Product」から「Web購入」までの各節は、
-> B-CONTRACT-01 / 02で確定した、B-PRODUCT / B-BUY / B-XP / B-BUILD Issueが実装する
-> 最終契約です。2026-09-26時点の`develop` (`46235a9`)はB-PRODUCT-01 #49を取込み済みで、
-> Product responseは`status`へ移行しました。一方、出品・購入writerは物理`stock`との互換期間中で、
-> 店舗pointsも販売店舗だけへ加算するため、後続Issue完了までは一部の動作が異なります。
->
-> 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。B-AUTH-01〜12、B-AUTH-SESSION #119、
-> B-DB-STRICT-MODE #120、B-AUTH-CONTRACT-CUTOVER #121、Frontend F-AUTH-01の段階移行中は、
-> この節の「移行順と互換期間」も参照してください。取引履歴とFabric APIの認証・pathは
-> 現行実装の説明です。ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
-> 店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
+## この文書の読み方
 
-## 現行から確定契約への変更
+- endpointの使い方は、各APIの節を参照してください。
+- HTTPの共通ルールは「共通仕様」、ログインとCSRFは「認証とCSRF」を参照してください。
+- DBの列・制約・移行方法は[`database.md`](./database.md)を参照してください。
+- `完成時`と書かれた節は、今後の最終仕様です。現在の動作と違う部分があります。
+
+### 現在の実装と最終仕様
+
+商品APIは一点物の商品状態`available` / `sold`へ移行中です。出品・購入処理と店舗ポイントの一部は、まだ最終仕様に達していません。
+
+認証も移行中です。最終仕様はusername認証ですが、runtimeの切り替えが完了するまではemail認証が動作します。移行順は「認証とCSRF」内の「移行順と互換期間」を参照してください。
+
+取引履歴とFabric APIのpath・認証方法は、現在の実装を説明しています。Fabric APIは開発用で、公開運用には対応していません。
+
+用語: `runtime`は実行中のAPI、`serializer`はDBの値をAPI responseへ変換する処理です。
+
+## 現在と最終仕様の主な違い
 
 | 対象           | 現行`develop`                                        | 確定契約                                                                |
 | -------------- | ---------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -31,8 +33,18 @@ camelCaseで返します。
 | 店舗level      | 境界と表示計算が実装に直書き                         | 境界、最大Lv、最大到達後、表示値、丸めを共通契約として固定              |
 | Webアカウント  | emailで認証し、`name`を表示                          | `username`で認証し、`displayName`を表示。emailは最終schemaに持たない    |
 
-DB列、制約、index、`stock=0 / 1 / 2以上`の移行規則は
-[`docs/database.md`](./database.md)を正本とします。
+DBの列・制約・移行規則は[`database.md`](./database.md)を参照してください。
+
+## 目次
+
+- [共通仕様](#共通仕様)
+- [店舗ポイント](#店舗ポイント)
+- [Web API](#webエンドポイント一覧)
+- [認証とCSRF](#認証とcsrf)
+- [一点物商品・出品・購入](#一点物product)
+- [店舗・取引](#店舗)
+- [Webフロント接続例](#webフロントの接続例)
+- [Fabric API](#fabric商品一覧)
 
 ## 共通仕様
 
