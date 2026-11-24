@@ -755,8 +755,9 @@ type Product = {
 このProduct DTOは`serializeProduct`を共有する商品一覧・詳細・出品だけでなく、
 `Dashboard.products`と現行`GET /minecraft/catalog`にも適用します。endpointごとに`stock`付きの別DTOは
 作りません。Dashboardの内部集計は物理`stock`を削除する前に新規Issue
-[B-DASHBOARD-PRODUCT-01 (#92)](https://github.com/IH-Ggroup/minetenant-backend/issues/92)で移行し、
-Minecraft APIの認証・最終pathはB-CONTRACT-05以降で扱います。
+[B-DASHBOARD-PRODUCT-01 (#92)](https://github.com/IH-Ggroup/minetenant-backend/issues/92)で移行します。
+Minecraft APIの認証は「Fabric Dedicated Server認証」を正本とし、商品閲覧・購入の最終pathは
+B-CONTRACT-05以降で扱います。
 
 ## 商品一覧
 
@@ -1196,9 +1197,10 @@ GET /api/v1/stores/store-mine/dashboard
 `level`と`points`から作る読み取り専用の公開GETです。認証は不要で、呼び出してもpointsやlevelを
 変更しません。存在しないStoreには404を返します。Storeとdashboardも同じ共通計算を利用します。
 
-このpathは`storeId`を知っているWeb向けの公開GETです。接続中playerのMinecraft UUIDからStoreを
-解決するFabric Server向けpath・認証・未連携時のerrorは本Issueでは決めず、Minecraft連携・認証の
-契約Issueを正本とします。MODはowner限定dashboardを流用したり、UUID用pathを推測したりしません。
+このpathは`storeId`を知っているWeb向けの公開GETです。Fabric Serverの認証は
+「Fabric Dedicated Server認証」を正本とします。接続中playerのMinecraft UUIDからStoreを解決する
+Fabric Server向けpathと未連携時のerrorは、Minecraft連携・商品APIの契約Issueで確定します。
+MODはowner限定dashboardを流用したり、UUID用pathを推測したりしません。
 
 ```ts
 type StoreGrowth = {
