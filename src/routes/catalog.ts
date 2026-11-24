@@ -22,6 +22,7 @@ import {
   listPublicProducts,
 } from '../services/public-products.js';
 import { getStoreDashboard } from '../services/store-dashboard.js';
+import { levelForPoints } from '../services/store-growth.js';
 import type { AppEnv } from '../types.js';
 
 export function createCatalogRoutes(
@@ -152,7 +153,9 @@ export function createCatalogRoutes(
       [c.req.param('store')],
     );
     if (!store) notFound();
-    return c.json({ data: serializeStore(store) });
+    return c.json({
+      data: serializeStore(store, levelForPoints(Number(store.points))),
+    });
   });
 
   routes.get('/stores/:store/dashboard', requireAuth, async (c) => {
