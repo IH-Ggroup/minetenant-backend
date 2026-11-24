@@ -864,7 +864,7 @@ describe('Hono API on MySQL', () => {
     );
   });
 
-  it('keeps Minecraft purchases unauthenticated, source-fixed, idempotent and shared with web', async () => {
+  it('keeps Fabric-authenticated purchases source-fixed, idempotent and shared with web', async () => {
     const payload = {
       productId: 'product-hoodie',
       buyerId: 'user-buyer',
