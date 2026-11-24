@@ -135,6 +135,6 @@ export function createApp({
   });
   app.route('/api/v1/auth', createAuthRoutes(db, config));
   app.route('/api/v1', createCatalogRoutes(db, config, requireAuth));
-  app.route('/api/v1', createPurchaseRoutes(db, config, requireAuth));
+  app.route('/api/v1', createPurchaseRoutes(db, requireAuth));
   return app;
 }
