@@ -69,10 +69,15 @@ describe('Web purchase API', () => {
       "SELECT status FROM products WHERE product_id = 'product-hoodie'",
     );
     expect(product?.status).toBe('sold');
-    const [store] = await test.db.query<{ points: number }>(
-      "SELECT points FROM stores WHERE store_id = 'store-mine'",
+    const stores = await test.db.query<{ store_id: string; points: number }>(
+      `SELECT store_id, points FROM stores
+        WHERE store_id IN ('store-mine', 'store-yamada')
+        ORDER BY store_id`,
     );
-    expect(store?.points).toBe(520);
+    expect(stores).toEqual([
+      { store_id: 'store-mine', points: 520 },
+      { store_id: 'store-yamada', points: 90 },
+    ]);
   });
 
   it('keeps the compatibility path limited to productId and requestId', async () => {
