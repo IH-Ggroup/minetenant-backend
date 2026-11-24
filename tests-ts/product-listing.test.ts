@@ -50,6 +50,14 @@ describe('idempotent single-item listings', () => {
     );
   }
 
+  async function storeGrowth(storeId = 'store-mine') {
+    const [store] = await test.db.query<{ points: number; level: number }>(
+      'SELECT points, level FROM stores WHERE store_id = ?',
+      [storeId],
+    );
+    return store;
+  }
+
   it('matches the documented SHA-256 fingerprint vector', () => {
     expect(productListingFingerprint(listing)).toBe(
       'adcbef587d9dea01e55944817c427fe41328abc42edaa097ef3a8b7ceddfa4ce',
@@ -76,6 +84,10 @@ describe('idempotent single-item listings', () => {
       listing_request_fingerprint:
         'adcbef587d9dea01e55944817c427fe41328abc42edaa097ef3a8b7ceddfa4ce',
     });
+    expect(rows[0]?.created_at).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    );
+    expect(await storeGrowth()).toEqual({ points: 430, level: 3 });
   });
 
   it('creates one product for eight simultaneous identical retries', async () => {
@@ -90,6 +102,105 @@ describe('idempotent single-item listings', () => {
     );
     expect(new Set(payloads.map((payload) => payload.data.id)).size).toBe(1);
     expect(await listingRows(listing.requestId)).toHaveLength(1);
+    expect(await storeGrowth()).toEqual({ points: 430, level: 3 });
+  });
+
+  it('rewards only the first three distinct listings of the JST day', async () => {
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        create(seller, {
+          ...listing,
+          requestId: `daily-listing-${index}`,
+          name: `日次出品 ${index}`,
+        }),
+      ),
+    );
+    for (const response of responses) await expectStatus(response, 201);
+
+    expect(await storeGrowth()).toEqual({ points: 450, level: 3 });
+    const [count] = await test.db.query<{ listing_count: number }>(
+      `SELECT COUNT(*) AS listing_count
+         FROM products
+        WHERE user_id = 'user-seller'
+          AND listing_request_id LIKE 'daily-listing-%'`,
+    );
+    expect(Number(count?.listing_count)).toBe(4);
+  });
+
+  it('counts sold and deleted listings toward the daily reward limit', async () => {
+    const createdIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const response = await create(seller, {
+        ...listing,
+        requestId: `consumed-slot-${index}`,
+      });
+      await expectStatus(response, 201);
+      createdIds.push((await response.json()).data.id as string);
+    }
+    await expectStatus(
+      await seller.json(`/api/v1/products/${createdIds[0]}`, 'DELETE'),
+      204,
+    );
+    await expectStatus(
+      await buyer.json(`/api/v1/products/${createdIds[1]}/purchases`, 'POST', {
+        requestId: 'purchase-consumed-slot',
+      }),
+      201,
+    );
+    expect(await storeGrowth()).toEqual({ points: 550, level: 3 });
+
+    await expectStatus(
+      await create(seller, {
+        ...listing,
+        requestId: 'after-consumed-slots',
+      }),
+      201,
+    );
+    expect(await storeGrowth()).toEqual({ points: 550, level: 3 });
+  });
+
+  it('uses JST day boundaries and excludes legacy listings', async () => {
+    await test.db.execute(`INSERT INTO products
+      (product_id, store_id, user_id, name, description, price, stock,
+       status, category, theme, emoji, listing_request_id,
+       listing_request_fingerprint, created_at, updated_at)
+      VALUES
+      ('previous-jst-listing', 'store-mine', 'user-seller', '前日', '', 1, 1,
+       'available', 'hobby', 'forest', '🌲', 'previous-jst-request',
+       REPEAT('a', 64),
+       TIMESTAMP(DATE(UTC_TIMESTAMP(6) + INTERVAL 9 HOUR))
+         - INTERVAL 9 HOUR - INTERVAL 1 SECOND,
+       UTC_TIMESTAMP(6)),
+      ('today-jst-listing', 'store-mine', 'user-seller', '当日', '', 1, 1,
+       'available', 'hobby', 'forest', '🌲', 'today-jst-request',
+       REPEAT('b', 64),
+       TIMESTAMP(DATE(UTC_TIMESTAMP(6) + INTERVAL 9 HOUR))
+         - INTERVAL 9 HOUR,
+       UTC_TIMESTAMP(6)),
+      ('legacy-today-listing', 'store-mine', 'user-seller', '旧出品', '', 1, 1,
+       'available', 'hobby', 'forest', '🌲', NULL, NULL,
+       UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))`);
+
+    for (const requestId of ['boundary-new-1', 'boundary-new-2']) {
+      await expectStatus(await create(seller, { ...listing, requestId }), 201);
+    }
+    expect(await storeGrowth()).toEqual({ points: 440, level: 3 });
+
+    await expectStatus(
+      await create(seller, { ...listing, requestId: 'boundary-capped' }),
+      201,
+    );
+    expect(await storeGrowth()).toEqual({ points: 440, level: 3 });
+  });
+
+  it('recomputes the level when listing points cross a threshold', async () => {
+    await test.db.execute(
+      "UPDATE stores SET points = 99, level = 1 WHERE store_id = 'store-mine'",
+    );
+
+    await expectStatus(await create(seller, listing), 201);
+
+    expect(await storeGrowth()).toEqual({ points: 109, level: 2 });
   });
 
   it('rejects sequential and simultaneous requestId reuse with different content', async () => {
@@ -117,6 +228,14 @@ describe('idempotent single-item listings', () => {
       201, 409,
     ]);
     expect(await listingRows(concurrentRequestId)).toHaveLength(1);
+  });
+
+  it('does not add points when input validation fails', async () => {
+    const response = await create(seller, { ...listing, price: 0 });
+
+    await expectStatus(response, 422);
+    expect(await listingRows(listing.requestId)).toHaveLength(0);
+    expect(await storeGrowth()).toEqual({ points: 420, level: 3 });
   });
 
   it('keeps one retired tombstone and prioritizes content conflicts', async () => {
@@ -176,6 +295,8 @@ describe('idempotent single-item listings', () => {
     expect(new Set(payloads.map((payload) => payload.data.id)).size).toBe(2);
     expect(await listingRows(listing.requestId, 'user-seller')).toHaveLength(1);
     expect(await listingRows(listing.requestId, 'user-buyer')).toHaveLength(1);
+    expect(await storeGrowth('store-mine')).toEqual({ points: 430, level: 3 });
+    expect(await storeGrowth('store-yamada')).toEqual({ points: 50, level: 1 });
   });
 
   it('returns USER_STORE_NOT_READY without creating a product', async () => {
@@ -204,10 +325,35 @@ describe('idempotent single-item listings', () => {
     try {
       await expectStatus(await create(seller, payload), 500);
       expect(await listingRows(payload.requestId)).toHaveLength(0);
+      expect(await storeGrowth()).toEqual({ points: 420, level: 3 });
     } finally {
       await test.db.execute('DROP TRIGGER hono_test_fail_listing');
     }
     await expectStatus(await create(seller, payload), 201);
     expect(await listingRows(payload.requestId)).toHaveLength(1);
+    expect(await storeGrowth()).toEqual({ points: 430, level: 3 });
+  });
+
+  it('rolls back the product when the store growth update fails', async () => {
+    await test.db.execute(`
+      CREATE TRIGGER hono_test_fail_listing_growth BEFORE UPDATE ON stores
+      FOR EACH ROW BEGIN
+        IF NEW.store_id = 'store-mine' AND NEW.points <> OLD.points THEN
+          SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Intentional growth failure';
+        END IF;
+      END
+    `);
+    const payload = { ...listing, requestId: 'failed-listing-growth' };
+    try {
+      await expectStatus(await create(seller, payload), 500);
+      expect(await listingRows(payload.requestId)).toHaveLength(0);
+      expect(await storeGrowth()).toEqual({ points: 420, level: 3 });
+    } finally {
+      await test.db.execute('DROP TRIGGER hono_test_fail_listing_growth');
+    }
+
+    await expectStatus(await create(seller, payload), 201);
+    expect(await listingRows(payload.requestId)).toHaveLength(1);
+    expect(await storeGrowth()).toEqual({ points: 430, level: 3 });
   });
 });
