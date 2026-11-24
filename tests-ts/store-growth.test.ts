@@ -145,4 +145,56 @@ describe('store API growth display', () => {
     );
     expect(stored?.level).toBe(1);
   });
+
+  it.each([
+    [0, 1, 100, 0, false],
+    [99, 1, 1, 99, false],
+    [100, 2, 200, 0, false],
+    [1000, 5, 0, 100, true],
+  ] as const)(
+    'returns the public growth contract at points=%s without changing the store',
+    async (
+      points,
+      level,
+      nextLevelPoints,
+      levelProgressPercent,
+      isMaxLevel,
+    ) => {
+      await test.db.execute(
+        "UPDATE stores SET points = ?, level = 1 WHERE store_id = 'store-mine'",
+        [points],
+      );
+      const publicClient = createClient(test.app);
+      const expected = {
+        storeId: 'store-mine',
+        level,
+        points,
+        nextLevelPoints,
+        levelProgressPercent,
+        maxLevel: 5,
+        isMaxLevel,
+      };
+
+      for (let request = 0; request < 2; request += 1) {
+        const response = await publicClient.request(
+          '/api/v1/stores/store-mine/growth',
+        );
+        await expectStatus(response, 200);
+        expect(await response.json()).toEqual({ data: expected });
+      }
+
+      const [stored] = await test.db.query<{ points: number; level: number }>(
+        "SELECT points, level FROM stores WHERE store_id = 'store-mine'",
+      );
+      expect(stored).toEqual({ points, level: 1 });
+    },
+  );
+
+  it('returns 404 for an unknown store', async () => {
+    const response = await createClient(test.app).request(
+      '/api/v1/stores/missing-store/growth',
+    );
+
+    await expectStatus(response, 404);
+  });
 });

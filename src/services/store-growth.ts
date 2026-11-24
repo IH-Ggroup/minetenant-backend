@@ -39,3 +39,11 @@ export function growthProgress(points: number) {
     isMaxLevel,
   };
 }
+
+export function storeGrowthState(points: number) {
+  return {
+    level: levelForPoints(points),
+    points,
+    ...growthProgress(points),
+  };
+}

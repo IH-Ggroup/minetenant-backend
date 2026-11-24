@@ -1,5 +1,4 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
-import type { AppConfig } from '../config.js';
 import type { Database } from '../db.js';
 import { purchaseResultNotFound } from '../domain/errors.js';
 import {
@@ -30,7 +29,6 @@ function rejectUnexpectedFields(
 
 export function createPurchaseRoutes(
   db: Database,
-  config: AppConfig,
   requireAuth: MiddlewareHandler<AppEnv>,
 ) {
   const routes = new Hono<AppEnv>();
@@ -82,7 +80,7 @@ export function createPurchaseRoutes(
       validator.throwIfInvalid();
     }
 
-    const result = await purchase(db, input, config.salePoints);
+    const result = await purchase(db, input);
     return c.json(
       { data: serializeTransaction(result.transaction) },
       result.created ? 201 : 200,
@@ -136,16 +134,12 @@ export function createPurchaseRoutes(
         validator.add('buyerId', '指定された購入者が見つかりません。');
     }
     validator.throwIfInvalid();
-    const result = await purchase(
-      db,
-      {
-        productId: productId!,
-        buyerId: buyerId!,
-        requestId: requestId!,
-        source: 'minecraft',
-      },
-      config.salePoints,
-    );
+    const result = await purchase(db, {
+      productId: productId!,
+      buyerId: buyerId!,
+      requestId: requestId!,
+      source: 'minecraft',
+    });
     return c.json(
       { data: serializeTransaction(result.transaction) },
       result.created ? 201 : 200,
