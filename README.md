@@ -222,5 +222,6 @@ Workerは同じ秘密値を`X-MineTenant-Origin-Token`で送信します。
 Honoは秘密値確認後のループバック経由でのみこの値を信用します。
 Cookie転送を利用できます。Honoの起動には`npm start`または`npm run dev`を使ってください。
 
-Minecraft専用APIは既存の未認証デモ仕様を維持し、公開モードでは遮断します。
-決済・配送・画像アップロード・Minecraft認証の追加は含みません。
+Minecraft専用APIは現在ローカルの未認証デモ仕様で、公開モードでは遮断します。
+Fabric Dedicated Server認証の最終契約は[`docs/api.md`](./docs/api.md#fabric-dedicated-server認証)に
+定義済みで、B-MC-AUTH-01 #62が実装します。決済・配送・画像アップロードは含みません。

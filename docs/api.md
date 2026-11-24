@@ -13,9 +13,11 @@ camelCaseで返します。
 >
 > 「認証とCSRF」はB-CONTRACT-07で確定したusername認証の最終契約です。B-AUTH-01〜12、B-AUTH-SESSION #119、
 > B-DB-STRICT-MODE #120、B-AUTH-CONTRACT-CUTOVER #121、Frontend F-AUTH-01の段階移行中は、
-> この節の「移行順と互換期間」も参照してください。取引履歴とFabric APIの認証・pathは
-> 現行実装の説明です。ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
+> この節の「移行順と互換期間」も参照してください。取引履歴は現行実装の説明です。
+> ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
 > 店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
+> Fabric専用APIの認証はB-CONTRACT-03で確定する最終契約です。`develop`では公開モードから
+> Minecraft routeを遮断し、ローカルでは未認証のままです。B-MC-AUTH-01 #62でこの契約を実装します。
 
 ## 現行から確定契約への変更
 
@@ -51,7 +53,8 @@ DB列、制約、index、`stock=0 / 1 / 2以上`の移行規則は
 - ログイン・登録の試行制限: `429 Too Many Requests`
 - Web認証: MySQLに保存するCookieセッション
 - WebのすべてのPOST・DELETEは、ログイン・登録も含めてCSRF検証の対象
-- Minecraft専用APIは既存の未認証デモ仕様を維持。公開運用には対応していない
+- Minecraft専用APIは最終的にFabric Dedicated Server専用のBearer認証を使う。#62完了までは
+  ローカルの未認証デモ仕様で、公開モードからは遮断する
 - メッセージ・チャットAPIは作らない
 
 B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
@@ -752,8 +755,9 @@ type Product = {
 このProduct DTOは`serializeProduct`を共有する商品一覧・詳細・出品だけでなく、
 `Dashboard.products`と現行`GET /minecraft/catalog`にも適用します。endpointごとに`stock`付きの別DTOは
 作りません。Dashboardの内部集計は物理`stock`を削除する前に新規Issue
-[B-DASHBOARD-PRODUCT-01 (#92)](https://github.com/IH-Ggroup/minetenant-backend/issues/92)で移行し、
-Minecraft APIの認証・最終pathはB-CONTRACT-05以降で扱います。
+[B-DASHBOARD-PRODUCT-01 (#92)](https://github.com/IH-Ggroup/minetenant-backend/issues/92)で移行します。
+Minecraft APIの認証は「Fabric Dedicated Server認証」を正本とし、商品閲覧・購入の最終pathは
+B-CONTRACT-05以降で扱います。
 
 ## 商品一覧
 
@@ -1193,9 +1197,10 @@ GET /api/v1/stores/store-mine/dashboard
 `level`と`points`から作る読み取り専用の公開GETです。認証は不要で、呼び出してもpointsやlevelを
 変更しません。存在しないStoreには404を返します。Storeとdashboardも同じ共通計算を利用します。
 
-このpathは`storeId`を知っているWeb向けの公開GETです。接続中playerのMinecraft UUIDからStoreを
-解決するFabric Server向けpath・認証・未連携時のerrorは本Issueでは決めず、Minecraft連携・認証の
-契約Issueを正本とします。MODはowner限定dashboardを流用したり、UUID用pathを推測したりしません。
+このpathは`storeId`を知っているWeb向けの公開GETです。Fabric Serverの認証は
+「Fabric Dedicated Server認証」を正本とします。接続中playerのMinecraft UUIDからStoreを解決する
+Fabric Server向けpathと未連携時のerrorは、Minecraft連携・商品APIの契約Issueで確定します。
+MODはowner限定dashboardを流用したり、UUID用pathを推測したりしません。
 
 ```ts
 type StoreGrowth = {
@@ -1430,12 +1435,145 @@ Frontend #94はこの契約を前提に実API接続するため、結合時に�
   `roleLabel`と`avatarInitial`を旧fixtureでhard-codeせずAPI responseを使い、emailログイン案内を
   完成時のREADMEへ残さない。
 
+## Fabric Dedicated Server認証
+
+この節はB-CONTRACT-03の正本です。B-MC-AUTH-01 #62が実装する最終契約を示します。
+Client JARやWebブラウザからMinecraft専用APIを直接呼びません。
+
+### 現在の公開境界
+
+公開モードではCloudflare Workerだけが`MINETENANT_ORIGIN_TOKEN`を持ち、Honoへ
+`X-MineTenant-Origin-Token`を付けてWeb APIを転送します。Minecraft routeは公開allowlistに含まれず、
+正しいOriginトークンがあっても404です。公開モードを無効にしたローカル開発環境では、現在の
+Minecraft routeへ認証なしで到達できます。
+
+```mermaid
+flowchart LR
+  Browser[Webブラウザ] -->|Cookie + CSRF| Worker[Cloudflare Worker]
+  Worker -->|X-MineTenant-Origin-Token| WebApi[Hono Web API]
+  Worker -. 404で遮断 .-> MinecraftApi["/api/v1/minecraft/**"]
+  LocalFabric[ローカルのFabric Server] -->|現在は未認証| MinecraftApi
+```
+
+`X-MineTenant-Origin-Token`はWorkerからHonoまでの公開経路を守る資格情報であり、
+Fabric Serverの識別には使いません。Fabric認証と同じ値を設定せず、Fabric ServerやClient JARへ
+Originトークンを配布しません。
+
+### #62実装後の認証境界
+
+Fabric Dedicated Serverだけが`MINETENANT_FABRIC_SERVER_TOKEN`を保持し、すべての
+`/api/v1/minecraft/**` requestへ次のheaderを付けます。Webのsession CookieとCSRF tokenは
+Minecraft routeへ送らず、FabricのBearer tokenもWebやClient JARへ送りません。
+
+```http
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+```
+
+```mermaid
+flowchart LR
+  Client[Fabric Client JAR] -->|tokenなし| Server[Fabric Dedicated Server]
+  Server -->|Authorization: Bearer token| Worker[Cloudflare Worker]
+  Worker -->|Authorizationを保持 + Origin headerを追加| Api["Hono /api/v1/minecraft/**"]
+  Browser[Webブラウザ] -->|Cookie + CSRF| Worker
+```
+
+公開経路では二つの境界を順番に通します。Workerは`Authorization`を変更せず、Hono向けの
+`X-MineTenant-Origin-Token`を追加します。Fabric ServerがOriginトークンを保持する必要はありません。
+公開モードを使わないローカル環境でもFabric認証は省略しません。
+
+Fabric認証middlewareはroute groupの先頭で、body parse、利用者や商品などの検索、業務DBのquery・更新より
+前に実行します。認証に失敗したrequestでは業務DBを読み書きせず、session Cookieも発行しません。
+
+### 保護するpath
+
+methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。現在の対象は次の2本です。
+
+| Method | path                          | 用途             |
+| ------ | ----------------------------- | ---------------- |
+| GET    | `/api/v1/minecraft/catalog`   | Fabric商品一覧   |
+| POST   | `/api/v1/minecraft/purchases` | Fabricからの購入 |
+
+アカウント連携や建築jobなどの後続Issueで追加するMinecraft routeも同じprefixの下へ置き、個別の
+認証付け忘れが起きないようroute group単位で保護します。`/up`、`/api/hello`、
+`/api/v1/auth/**`、およびその他のWeb APIはFabric認証の対象外です。
+
+### 資格情報
+
+- 環境変数名は`MINETENANT_FABRIC_SERVER_TOKEN`とする。
+- tokenは64〜256 byteの空白・制御文字を含まないASCII文字列とする。前後をtrimせず、受信値と
+  完全一致でconstant-time比較する。
+- 生成には32 byteの乱数を64文字のhexへ変換する`openssl rand -hex 32`を推奨する。
+- debug・test・productionのどの環境でも、未設定または形式不正ならHTTP listen前に起動を失敗させる。
+  開発時も認証を無効化する設定は作らない。
+- backend側は環境変数またはhostingのsecret機能、Fabric側はDedicated Serverだけが読める環境変数か
+  server専用設定へ保存する。Client JAR、Webの環境変数、Git、Issue、API response、通常logへ入れない。
+- token値だけでなく、prefix、文字数、比較結果の詳細もresponseやlogへ出さない。logには固定のerror codeと
+  requestの追跡に必要な秘密でない情報だけを残す。
+
+3月までは一つのDedicated Serverと一つのopaque tokenだけを扱います。OAuth、JWT、scope、
+server ID、複数serverの資格情報管理は追加しません。
+
+### 認証結果とerror
+
+| 条件                                           | 結果 | code                                | 再送規則                                     |
+| ---------------------------------------------- | ---: | ----------------------------------- | -------------------------------------------- |
+| headerなし、Bearer以外、tokenなし、token不一致 |  401 | `FABRIC_AUTHENTICATION_FAILED`      | 設定を直すまで自動再送しない                 |
+| token一致                                      | 続行 | なし                                | 各endpointの正常・業務errorを返す            |
+| token一致後に将来の操作権限規則で拒否          |  403 | `FABRIC_FORBIDDEN`                  | 同じ内容を自動再送しない                     |
+| 起動後に資格情報が利用不能となった防御的な異常 |  503 | `FABRIC_AUTHENTICATION_UNAVAILABLE` | 業務処理せず、間隔を空けて運用担当へ通知する |
+
+headerなしと誤ったtokenは、資格情報の有無を推測させない同じ401 responseにします。401には
+`WWW-Authenticate: Bearer realm="minetenant-fabric"`を付けます。現在はserver別権限を持たないため、
+#62でtoken不一致を403にせず、403は将来正しい資格情報の操作権限を導入した場合だけに使います。
+
+```json
+{
+  "message": "Fabric server authentication failed.",
+  "code": "FABRIC_AUTHENTICATION_FAILED"
+}
+```
+
+```json
+{
+  "message": "Fabric server is not authorized for this operation.",
+  "code": "FABRIC_FORBIDDEN"
+}
+```
+
+```json
+{
+  "message": "Fabric server authentication is unavailable.",
+  "code": "FABRIC_AUTHENTICATION_UNAVAILABLE"
+}
+```
+
+未設定・形式不正は通常HTTP requestを受ける前に起動失敗となります。503は、testから不正なconfigを
+直接注入した場合や、起動後に資格情報を取得できなくなった場合にも公開状態へfallbackしないための
+防御的な応答です。401・403・503の本文は固定し、受信tokenの値や長さによって変えません。
+
+正しいtokenでは認証middleware自身が成功本文を返さず、対象endpointへ処理を渡します。
+たとえば商品一覧は200、購入は各購入契約どおり初回201・同じ`requestId`の再送200となります。
+
+### tokenの更新
+
+複数tokenの同時受付は行わず、短い保守時間を設けて次の順番で更新します。
+
+1. Fabricからの新規処理を止める。
+2. `openssl rand -hex 32`で新しいtokenを生成する。
+3. backendのsecretとDedicated Serverのserver専用設定を新しい値へ更新する。
+4. backendとDedicated Serverを再起動し、新tokenで正常到達、旧tokenで401になることを確認する。
+5. secret管理元から旧tokenを削除し、Fabricの処理を再開する。
+
+tokenそのものを確認記録へ貼らず、更新日時と確認結果だけを残します。認証失敗の再送では
+業務処理が始まらないため、DB更新や購入の重複は発生しません。認証成功後の再送は各endpointの
+`requestId`と冪等性契約に従います。
+
 ## Fabric商品一覧
 
-以下のMinecraft専用APIの認証・pathは今回変更していません。Webのセッション認証・CSRF検証は
-適用されず、開発用の未認証APIです。responseの各商品は共有の一点物Productなので、`stock`ではなく
-`status`を返し、`status: "sold"`の商品は購入できません。Minecraft側の認証・最終pathは
-B-CONTRACT-05の範囲です。Web画面からはこちらを使わないでください。
+以下のpathは現在もローカル開発用の未認証APIで、#62が上記のFabric認証を実装します。
+Webのセッション認証・CSRF検証は適用しません。responseの各商品は共有の一点物Productなので、
+`stock`ではなく`status`を返し、`status: "sold"`の商品は購入できません。Web画面からはこちらを
+使わないでください。
 
 ```http
 GET /api/v1/minecraft/catalog
