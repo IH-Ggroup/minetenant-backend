@@ -12,6 +12,7 @@ import type { AppConfig } from './config.js';
 import type { Database } from './db.js';
 import { formatErrorForLog } from './diagnostics.js';
 import { HttpError } from './domain/errors.js';
+import { fabricServerAuth } from './fabric-auth.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createCatalogRoutes } from './routes/catalog.js';
 import { createPurchaseRoutes } from './routes/purchases.js';
@@ -73,7 +74,7 @@ export function createApp({
       }
       const path = c.req.path;
       if (
-        !/^\/api\/v1\/(?:auth\/(?:csrf-cookie|register|login|me|logout)|products(?:\/.*)?|stores\/.+|purchases(?:\/requests\/[^/]+)?|transactions(?:\/.*)?)$/.test(
+        !/^\/api\/v1\/(?:auth\/(?:csrf-cookie|register|login|me|logout)|products(?:\/.*)?|stores\/.+|purchases(?:\/requests\/[^/]+)?|transactions(?:\/.*)?|minecraft(?:\/.*)?)$/.test(
           path,
         )
       ) {
@@ -82,6 +83,8 @@ export function createApp({
     }
     await next();
   });
+
+  app.use('/api/v1/minecraft/*', fabricServerAuth(config));
 
   const corsMiddleware = cors({
     origin: (origin) => (config.corsOrigins.includes(origin) ? origin : ''),

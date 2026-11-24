@@ -6,6 +6,7 @@ import {
   createClient,
   createTestApp,
   expectStatus,
+  TEST_FABRIC_SERVER_TOKEN,
   type TestApp,
 } from './helpers.js';
 
@@ -123,32 +124,37 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     );
   });
 
-  it('blocks Minecraft, user directory, health, development and unknown paths', async () => {
+  it('blocks user directory, health, development and unknown paths', async () => {
     const app = publicApp();
-    for (const path of [
-      '/',
-      '/up',
-      '/api/hello',
-      '/api/v1/unknown',
-      '/api/v1/minecraft/catalog',
-      '/api/v1/minecraft/purchases',
-    ]) {
+    for (const path of ['/', '/up', '/api/hello', '/api/v1/unknown']) {
       const response = await app.request(path, {
         headers: { 'X-MineTenant-Origin-Token': originToken },
       });
       await expectStatus(response, 404);
       expect(await response.json()).toEqual({ message: 'Not found.' });
     }
+  });
+
+  it('requires both the Worker origin and Fabric server credentials publicly', async () => {
+    const app = publicApp();
+    const originHeaders = { 'X-MineTenant-Origin-Token': originToken };
+    const missing = await app.request('/api/v1/minecraft/catalog', {
+      headers: originHeaders,
+    });
+    await expectStatus(missing, 401);
+    expect(await missing.json()).toEqual({
+      message: 'Fabric server authentication failed.',
+      code: 'FABRIC_AUTHENTICATION_FAILED',
+    });
+
     await expectStatus(
-      await app.request('/api/v1/minecraft/purchases', {
-        method: 'POST',
+      await app.request('/api/v1/minecraft/catalog', {
         headers: {
-          'X-MineTenant-Origin-Token': originToken,
-          'Content-Type': 'application/json',
+          ...originHeaders,
+          Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
         },
-        body: JSON.stringify({ buyerId: 'user-buyer' }),
       }),
-      404,
+      200,
     );
   });
 
@@ -161,7 +167,15 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     });
     await expectStatus(await app.request('/api/hello'), 200);
     await expectStatus(await app.request('/api/v1/auth/csrf-cookie'), 204);
-    await expectStatus(await app.request('/api/v1/minecraft/catalog'), 200);
+    await expectStatus(await app.request('/api/v1/minecraft/catalog'), 401);
+    await expectStatus(
+      await app.request('/api/v1/minecraft/catalog', {
+        headers: {
+          Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
+        },
+      }),
+      200,
+    );
   });
 
   it('trusts only the authenticated Worker client IP from a loopback transport', async () => {

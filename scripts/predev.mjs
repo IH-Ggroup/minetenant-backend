@@ -58,11 +58,19 @@ export function envWithUniqueDatabaseCredentials(
       '安全なローカルDBユーザー名を生成できませんでした。',
     );
   }
-  return replaceEnvAssignment(
+  let contents = replaceEnvAssignment(
     replaceEnvAssignment(template, 'DB_USERNAME', username),
     'DB_PASSWORD',
     password,
   );
+  if (/^MINETENANT_FABRIC_SERVER_TOKEN=.*$/m.test(contents)) {
+    contents = replaceEnvAssignment(
+      contents,
+      'MINETENANT_FABRIC_SERVER_TOKEN',
+      createRandomBytes(32).toString('hex'),
+    );
+  }
+  return contents;
 }
 
 export async function ensureEnvFile(

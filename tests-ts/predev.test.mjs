@@ -85,9 +85,13 @@ describe('dependency-free development preflight', () => {
   });
 
   it('generates MySQL-safe clone credentials without logging or reusing template secrets', () => {
-    const values = [Buffer.alloc(6, 0xab), Buffer.alloc(24, 0xcd)];
+    const values = [
+      Buffer.alloc(6, 0xab),
+      Buffer.alloc(24, 0xcd),
+      Buffer.alloc(32, 0xef),
+    ];
     const generated = envWithUniqueDatabaseCredentials(
-      'DB_USERNAME=minetenant\nDB_PASSWORD=minetenant\n',
+      'DB_USERNAME=minetenant\nDB_PASSWORD=minetenant\nMINETENANT_FABRIC_SERVER_TOKEN=\n',
       () => values.shift(),
     );
     const settings = parseEnvFile(generated);
@@ -95,6 +99,7 @@ describe('dependency-free development preflight', () => {
     expect(settings.DB_USERNAME).toMatch(/^[A-Za-z0-9_]{1,32}$/);
     expect(settings.DB_PASSWORD).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(settings.DB_PASSWORD).not.toBe('minetenant');
+    expect(settings.MINETENANT_FABRIC_SERVER_TOKEN).toBe('ef'.repeat(32));
   });
 
   it('detects only a complete runtime install', async () => {

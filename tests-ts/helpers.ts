@@ -9,6 +9,7 @@ import { migrate } from '../scripts/migrate.js';
 import { seedDemo } from '../scripts/seed.js';
 
 const TEST_DATABASE = 'minetenant_test';
+export const TEST_FABRIC_SERVER_TOKEN = 'f'.repeat(64);
 
 loadEnv({ path: '.env', quiet: true });
 
@@ -37,6 +38,7 @@ export async function createTestApp(overrides: Partial<AppConfig> = {}) {
       SESSION_DOMAIN: 'null',
       CORS_ALLOWED_ORIGINS: 'http://localhost:5173,http://127.0.0.1:5173',
       MINETENANT_PUBLIC_TUNNEL: 'false',
+      MINETENANT_FABRIC_SERVER_TOKEN: TEST_FABRIC_SERVER_TOKEN,
     }),
     ...overrides,
   };
@@ -101,11 +103,21 @@ export function assertTestDatabaseIsolation(
 
 export type TestApp = Awaited<ReturnType<typeof createTestApp>>;
 
-export function createClient(app: Pick<Hono<AppEnv>, 'request'>) {
+export function createClient(
+  app: Pick<Hono<AppEnv>, 'request'>,
+  fabricServerToken = TEST_FABRIC_SERVER_TOKEN,
+) {
   const cookies = new Map<string, string>();
 
   async function request(path: string, init: RequestInit = {}) {
     const headers = new Headers(init.headers);
+    const pathname = new URL(path, 'http://localhost').pathname;
+    if (
+      pathname.startsWith('/api/v1/minecraft/') &&
+      !headers.has('Authorization')
+    ) {
+      headers.set('Authorization', `Bearer ${fabricServerToken}`);
+    }
     if (!headers.has('Cookie') && cookies.size > 0) {
       headers.set(
         'Cookie',
