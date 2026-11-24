@@ -10,7 +10,7 @@ describe('atomic MySQL purchases and deletion races', () => {
   let test: TestApp;
 
   beforeAll(async () => {
-    test = await createTestApp();
+    test = await createTestApp({ salePoints: 777 });
   });
   beforeEach(async () => {
     await test.reset();
@@ -144,6 +144,7 @@ describe('atomic MySQL purchases and deletion races', () => {
       status: 'sold',
     });
     expect(await points('store-yamada')).toBe(140);
+    expect(await points('store-mine')).toBe(470);
     expect(await transactions()).toHaveLength(2);
   });
 
@@ -166,6 +167,7 @@ describe('atomic MySQL purchases and deletion races', () => {
       status: 'sold',
     });
     expect(await points('store-yamada')).toBe(140);
+    expect(await points('store-mine')).toBe(470);
   });
 
   it('resolves simultaneous requestId reuse across different products as one purchase and one conflict', async () => {
@@ -189,6 +191,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     ]);
     expect(states.reduce((total, state) => total + state!.stock, 0)).toBe(1);
     expect(await points('store-mine')).toBe(520);
+    expect(await points('store-yamada')).toBe(90);
     const winner = history[0]!.product_id;
     expect(await productState(winner)).toEqual({ stock: 0, status: 'sold' });
   });
@@ -210,11 +213,52 @@ describe('atomic MySQL purchases and deletion races', () => {
       status: 'sold',
     });
     expect(await points('store-mine')).toBe(620);
+    expect(await points('store-yamada')).toBe(140);
     const [store] = await test.db.query<{ level: number }>(
       "SELECT level FROM stores WHERE store_id = 'store-mine'",
     );
     expect(store?.level).toBe(4);
     expect(await transactions()).toHaveLength(3);
+  });
+
+  it('locks buyer and seller stores in one order for opposite purchases', async () => {
+    const responses = await Promise.all([
+      purchase('product-hoodie', 'user-buyer', 'opposite-first'),
+      purchase('product-toolbag', 'user-seller', 'opposite-second'),
+    ]);
+
+    for (const response of responses) await expectStatus(response, 201);
+    expect(await points('store-mine')).toBe(570);
+    expect(await points('store-yamada')).toBe(190);
+    expect(await transactions()).toHaveLength(3);
+  });
+
+  it('returns USER_STORE_NOT_READY and rolls back when the buyer has no store', async () => {
+    await test.db.execute(`INSERT INTO users
+      (user_id, role, username, display_name, password_hash,
+       created_at, updated_at)
+      SELECT 'user-without-store', 'buyer', 'buyer_without_store',
+             '店舗なし購入者', password_hash, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6)
+        FROM users
+       WHERE user_id = 'user-buyer'`);
+
+    const response = await purchase(
+      'product-hoodie',
+      'user-without-store',
+      'buyer-store-missing',
+    );
+
+    await expectStatus(response, 409);
+    expect(await response.json()).toEqual({
+      message: '購入に必要な店舗が準備されていません。',
+      code: 'USER_STORE_NOT_READY',
+    });
+    expect(await productState('product-hoodie')).toEqual({
+      stock: 1,
+      status: 'available',
+    });
+    expect(await transactions('buyer-store-missing')).toHaveLength(0);
+    expect(await points('store-mine')).toBe(420);
   });
 
   it('rolls product status, transaction and store growth back when the transaction insert fails', async () => {
@@ -240,6 +284,7 @@ describe('atomic MySQL purchases and deletion races', () => {
         status: 'available',
       });
       expect(await points('store-mine')).toBe(420);
+      expect(await points('store-yamada')).toBe(40);
       expect(await transactions('forced-sql-failure')).toHaveLength(0);
       expect(await transactions()).toHaveLength(1);
     } finally {
@@ -254,13 +299,14 @@ describe('atomic MySQL purchases and deletion races', () => {
       status: 'sold',
     });
     expect(await points('store-mine')).toBe(520);
+    expect(await points('store-yamada')).toBe(90);
   });
 
   it('rolls back the inserted transaction and product status when store growth fails', async () => {
     await test.db.execute(`
       CREATE TRIGGER hono_test_fail_growth BEFORE UPDATE ON stores
       FOR EACH ROW BEGIN
-        IF NEW.store_id = 'store-mine' AND NEW.points <> OLD.points THEN
+        IF NEW.store_id = 'store-yamada' AND NEW.points <> OLD.points THEN
           SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Intentional growth rollback test';
         END IF;
       END
@@ -275,6 +321,7 @@ describe('atomic MySQL purchases and deletion races', () => {
         status: 'available',
       });
       expect(await points('store-mine')).toBe(420);
+      expect(await points('store-yamada')).toBe(40);
       expect(await transactions('growth-failure')).toHaveLength(0);
     } finally {
       await test.db.execute('DROP TRIGGER hono_test_fail_growth');
@@ -302,6 +349,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     });
     expect(await transactions('deleted-product')).toHaveLength(0);
     expect(await points('store-mine')).toBe(420);
+    expect(await points('store-yamada')).toBe(40);
   });
 
   it('lets purchase finish first when it waits for the product lock before deletion', async () => {
@@ -330,6 +378,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     });
     expect(await transactions('purchase-first-race')).toHaveLength(1);
     expect(await points('store-mine')).toBe(520);
+    expect(await points('store-yamada')).toBe(90);
     expect(await transactions('request-demo')).toHaveLength(1);
   });
 
@@ -366,6 +415,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     expect(product?.deleted_at).not.toBeNull();
     expect(await transactions('deletion-first-race')).toHaveLength(0);
     expect(await points('store-mine')).toBe(420);
+    expect(await points('store-yamada')).toBe(40);
     expect(await transactions('request-demo')).toHaveLength(1);
   });
 });

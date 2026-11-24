@@ -79,6 +79,20 @@ export function serializeStore(store: StoreRow, level: number) {
   };
 }
 
+export function serializeStoreGrowth(
+  storeId: string,
+  growth: {
+    level: number;
+    points: number;
+    nextLevelPoints: number;
+    levelProgressPercent: number;
+    maxLevel: number;
+    isMaxLevel: boolean;
+  },
+) {
+  return { storeId, ...growth };
+}
+
 export function serializeTransaction(transaction: TransactionRow) {
   return {
     id: transaction.transaction_id,
