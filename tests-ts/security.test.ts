@@ -109,6 +109,12 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     expect(me.headers.get('Content-Type')).toContain('application/json');
     expect(await me.json()).toEqual({ message: 'Unauthenticated.' });
     await expectStatus(
+      await app.request('/api/v1/purchases/requests/request-demo', {
+        headers,
+      }),
+      401,
+    );
+    await expectStatus(
       await app.request('/api/v1/auth/login', {
         method: 'POST',
         headers,
