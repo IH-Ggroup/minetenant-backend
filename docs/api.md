@@ -19,6 +19,8 @@ camelCaseで返します。
 > Fabric専用APIの認証はB-CONTRACT-03で確定し、B-MC-AUTH-01 #62で実装する契約です。
 > ローカルでHonoへ直接接続するMinecraft routeにはFabric Dedicated Server認証が必要です。
 > 現在の公開モードとFront WorkerではMinecraft routeを公開しません。
+> Minecraft建築jobはB-CONTRACT-06で確定した最終契約です。points由来の論理levelとworldへ
+> 適用済みの建築levelを分け、増築は店主の明示操作で開始します。
 
 ## 現行から確定契約への変更
 
@@ -46,6 +48,7 @@ DBの列・制約・移行規則は[`database.md`](./database.md)を参照して
 - [店舗・取引](#店舗)
 - [Webフロント接続例](#webフロントの接続例)
 - [Minecraftアカウント連携](#webアカウントとminecraft-uuidの連携)
+- [Minecraft建築job](#minecraft建築job)
 - [Fabric API](#fabric商品一覧)
 
 ## 共通仕様
@@ -183,23 +186,23 @@ floor((points - 現在levelの必要points) / (次levelの必要points - 現在l
 |  1,000 |     5 |               0 |                  100 | true       |
 |  1,001 |     5 |               0 |                  100 | true       |
 
-#### B-BUILD-03へ渡すlevel変更
+#### 建築可能levelの決定
 
 初回成功するpoints更新ごとに、対象Storeをlockした後の値を`oldPoints`、加算後を`newPoints`とし、
 それぞれから`oldLevel`と`newLevel`を計算します。複数店舗を更新する購入ではStoreごとに別々に
-計算します。`oldLevel < newLevel`の結果だけをB-BUILD-03へ渡し、points、level、原因となる
-ProductまたはTransaction、後続の建築jobを同じtransactionでcommitできるようにします。1回の加算で
-複数境界を越えた場合に作るjobの単位と状態遷移はB-CONTRACT-06を正本とします。
+計算します。pointsと`newLevel`は原因となるProductまたはTransactionと同じtransactionでcommitしますが、
+`oldLevel < newLevel`だけでは増築jobを作りません。論理levelの到達とMinecraft worldへの建築適用は
+別の状態です。
 
 同じ`requestId`の再送、入力不正、競合、rollbackでは新しいlevel変更結果を発生させません。
 最大Lv到達後はpointsだけが増え、`oldLevel`と`newLevel`はともに5なのでlevel変更なしです。
 
 ここでいう`level`、`oldLevel`、`newLevel`はpoints由来の論理的な成長levelで、Minecraftのworldへ
 適用済みの建築levelではありません。登録時点ですでに`level: 1`なので、初回Lv1建築を
-`oldLevel: 0`から`newLevel: 1`への成長として扱いません。建築済みlevelのfield名、Lv1建築、
-対応templateがあるtarget levelだけをjob化する規則、Lv1完了前にLv2をclaimしない順序は
-B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの受け渡し値であり、
-`StoreGrowth`の公開fieldには含めません。
+`oldLevel: 0`から`newLevel: 1`への成長として扱いません。初回Lv1建築は最初の出品成功で一度だけ
+作成し、Lv2以降は到達済みlevelの範囲で店主がWebから明示操作したときだけjobを作成します。
+対応template、建築済みlevel、Lv1完了前にLv2をclaimしない順序はB-CONTRACT-06を正本とします。
+`oldLevel`と`newLevel`は内部serviceの受け渡し値であり、`StoreGrowth`の公開fieldには含めません。
 
 ## Webエンドポイント一覧
 
@@ -227,6 +230,9 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 | GET    | `/transactions/{transactionId}`   | 取引関係者のみ | 取引詳細、200 `data: Transaction`                            |
 | POST   | `/minecraft-links/codes`          | 必須           | 短期連携code発行、201 `data: MinecraftLinkCodeIssued`        |
 | GET    | `/minecraft-links/codes/{codeId}` | 発行者本人のみ | 連携状態照会、200 `data: MinecraftLinkCodeStatus`            |
+| POST   | `/build-jobs`                     | 必須           | 到達済みlevelの建築job作成、201または200                     |
+| GET    | `/build-jobs/latest`              | 必須           | 本人店舗の建築概要、200                                      |
+| POST   | `/build-jobs/{jobId}/retry`       | 所有者のみ     | failed jobを同じIDで再待機、200                              |
 
 `GET /api/hello`はv1の外にある疎通確認用APIです。商品編集・店舗編集・決済・
 住所保存のAPIはこのPoCには含みません。
@@ -1502,14 +1508,16 @@ Fabric認証middlewareはroute groupの先頭で、body parse、利用者や商�
 
 ### 保護するpath
 
-methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。現在および
-B-CONTRACT-04で確定した対象は次のとおりです。
+methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。確定済みの対象は
+次のとおりです。
 
-| Method | path                              | 用途              |
-| ------ | --------------------------------- | ----------------- |
-| GET    | `/api/v1/minecraft/catalog`       | Fabric商品一覧    |
-| POST   | `/api/v1/minecraft/purchases`     | Fabricからの購入  |
-| POST   | `/api/v1/minecraft/links/consume` | Webアカウント連携 |
+| Method | path                                       | 用途              |
+| ------ | ------------------------------------------ | ----------------- |
+| GET    | `/api/v1/minecraft/catalog`                | Fabric商品一覧    |
+| POST   | `/api/v1/minecraft/purchases`              | Fabricからの購入  |
+| POST   | `/api/v1/minecraft/links/consume`          | Webアカウント連携 |
+| POST   | `/api/v1/minecraft/build-jobs/claim`       | 建築job claim     |
+| POST   | `/api/v1/minecraft/build-jobs/{jobId}/ack` | 建築結果ACK       |
 
 アカウント連携や建築jobなどの後続Issueで追加するMinecraft routeも同じprefixの下へ置き、個別の
 認証付け忘れが起きないようroute group単位で保護します。`/up`、`/api/hello`、
@@ -1766,6 +1774,278 @@ Fabric認証の後、(1) body形式、(2) codeの存在、(3) 使用済み、(4)
 - 競合: 同じcodeの同時consumeで成功1件、再発行とconsumeの同時実行で連携済みUserの有効codeが残らない。
 - rollback: SQL失敗でlinkと`consumed_at`を両方rollbackし、再発行失敗で旧codeの期限も変更しない。
 - 秘密境界: Web・Client JAR・response・logにFabric token、code hash、UUID全値を出さない。
+
+## Minecraft建築job
+
+この節はB-CONTRACT-06のAPI正本です。建築jobはHonoが許可済みtemplateと対象Storeだけを指示し、
+Fabric Dedicated ServerがServer登録済みの固定plotへ適用します。Honoから座標、dimension、block列、
+NBT、commandを返しません。Client MODは建築job APIへ接続せず、Fabric tokenやlease tokenも受け取りません。
+
+### リポジトリ間の境界
+
+- Frontは`/api/v1/build-jobs`、`/api/v1/build-jobs/latest`、
+  `/api/v1/build-jobs/{jobId}/retry`だけを呼び、書込みにはCookieとCSRFを使う。
+- Front Workerは上記Web pathだけを明示的にallowlistへ追加し、`/api/v1/minecraft/**`は公開しない。
+- Fabric ServerはBearer認証で`claim / ack`を呼び、jobとACK結果をServer側へ永続化する。
+- Client MODは画面表示に必要な状態だけを受け取り、Hono、Fabric token、lease tokenへ触れない。
+
+### 論理levelと建築済みlevel
+
+Storeの`level`はpointsから自動計算する論理levelです。Minecraft worldへ最後に適用済みのlevelは
+`builtLevel`として建築jobの完了結果から導出し、Storeの`level`とは分けます。
+
+- 最初の出品が初回成功したtransactionで、Lv1の`initial_build` jobを一度だけ作る。
+- pointsがlevel境界へ到達しただけでは`level_upgrade` jobを作らない。
+- Lv2以降は店主がWebの成長操作を行った時だけ、到達済みlevelの次の1段をjobにする。
+- Clientは`targetLevel`や`templateId`を指定しない。HonoがStoreの論理level、完了job、whitelistから決める。
+- Lv1が`completed`になるまでLv2をclaimしない。levelを飛ばして建築しない。
+
+承認済みtemplateは次の2件です。論理levelはLv5まで上がりますが、承認済みtemplateがないLv3〜5の
+jobは作りません。templateを増やす場合はBackendとModの両方でwhitelistを追加し、同じreleaseで
+有効化します。
+
+| job kind        | targetLevel | templateId                     | Web表示名     |
+| --------------- | ----------: | ------------------------------ | ------------- |
+| `initial_build` |           1 | `minetenant:store/lv1`         | Lv.1 店舗建築 |
+| `level_upgrade` |           2 | `minetenant:store/lv2_upgrade` | Lv.2 店舗増築 |
+
+Fabric Serverは`storeId`を自分のplot registryへ照合し、Storeへ登録済みのplotだけを選びます。plotがない、
+別Storeに割り当て済み、templateのboundsが範囲外の場合はworldを変更せず失敗ACKにします。
+
+### 状態遷移
+
+DBの状態は`pending / leased / completed / failed`です。Webには`pending`を`waiting`、`leased`を
+`processing`として返します。
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending: 初回出品または店主の成長操作
+  pending --> leased: claim
+  leased --> completed: 有効leaseで成功ACK
+  leased --> failed: 有効leaseで失敗ACK
+  leased --> leased: lease切れ後に同じjobIdを再claim
+  leased --> failed: lease取得が5回失効
+  failed --> pending: 店主が再試行
+  completed --> [*]
+```
+
+配送はat-least-onceです。同じ`jobId`はresponse損失、ACK失敗、Server再起動、lease切れで再配送されます。
+Fabric Serverは適用済み`jobId`をworldの永続dataへ保存し、同じjobを受け取った場合はworldを再変更せず、
+新しいlease tokenで同じ成功結果だけをACKします。exactly-once配送とは扱いません。
+
+### Web用建築概要
+
+```http
+GET /api/v1/build-jobs/latest
+```
+
+Cookie sessionが必要です。認証Userが所有するStoreだけを対象にし、GETはjob、lease、attempt、Storeを
+更新しません。Webは待機中・処理中だけ約3秒間隔で、前回response完了後に次のGETを開始します。
+
+```json
+{
+  "data": {
+    "storeLevel": 2,
+    "builtLevel": 1,
+    "nextBuildableLevel": 2,
+    "canRequestBuild": true,
+    "job": {
+      "id": "0d98d85e-baa6-4e7f-986c-85ac3ad82921",
+      "kind": "initial_build",
+      "targetLevel": 1,
+      "templateName": "Lv.1 店舗建築",
+      "status": "completed",
+      "failureCode": null,
+      "createdAt": "2026-11-25T08:00:00.000000Z",
+      "updatedAt": "2026-11-25T08:00:04.000000Z"
+    }
+  }
+}
+```
+
+```ts
+type BuildJobView = {
+  id: string;
+  kind: 'initial_build' | 'level_upgrade';
+  targetLevel: number;
+  templateName: string;
+  status: 'waiting' | 'processing' | 'completed' | 'failed';
+  failureCode:
+    | 'TEMPLATE_NOT_AVAILABLE'
+    | 'PLOT_NOT_REGISTERED'
+    | 'PLOT_NOT_READY'
+    | 'WORLD_APPLY_FAILED'
+    | 'SERVER_STATE_CONFLICT'
+    | 'LEASE_RETRY_EXHAUSTED'
+    | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type BuildJobOverview = {
+  storeLevel: number;
+  builtLevel: number;
+  nextBuildableLevel: number | null;
+  canRequestBuild: boolean;
+  job: BuildJobView | null;
+};
+```
+
+jobが一度もないStoreも200で`job: null, builtLevel: 0`を返します。`nextBuildableLevel`は
+`builtLevel + 1`が論理level以下かつtemplate whitelist内で、Lv1の場合はStoreに商品が1件以上ある時だけ
+そのlevel、それ以外は`null`です。`canRequestBuild`は次のlevelがあり、`pending / leased / failed`のjobが
+ない時だけ`true`です。Webにはlease token、lease期限、attempt、内部error、template ID、座標、NBTを
+返しません。
+
+### 店主による建築・増築開始
+
+```http
+POST /api/v1/build-jobs
+Content-Type: application/json
+X-XSRF-TOKEN: CookieをURLデコードした値
+```
+
+```json
+{
+  "requestId": "59ad378c-f070-45cc-bb82-d78602ac9363"
+}
+```
+
+Cookie sessionとCSRF検証が必要です。bodyは`requestId`だけで、`storeId`、`targetLevel`、`templateId`、
+座標、NBTを受けません。HonoはUserのStoreをlockし、建築済みlevelの次の1段が論理level到達済みか、
+承認済みtemplateがあるか、前段がcompletedかを検証します。通常のLv1 jobは最初の出品で自動作成しますが、
+商品があるのにjobがないStoreでは、この明示操作でLv1を作成できます。
+
+初回作成は201、同じStore・同じ`requestId`の再送は200で、同じ`BuildJobView`を返します。
+job作成はpointsやStoreの論理levelを変更しません。同じtarget levelへの同時操作もDBの
+`(store_id, target_level)`一意制約で1件だけになります。
+
+### Fabric Serverによるclaim
+
+```http
+POST /api/v1/minecraft/build-jobs/claim
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+```
+
+bodyはありません。実行可能なjobがない場合も`200 { "data": null }`です。jobがある場合はDB transactionで
+1件をlockし、`leased`へ更新してから次を返します。
+
+```json
+{
+  "data": {
+    "jobId": "0d98d85e-baa6-4e7f-986c-85ac3ad82921",
+    "storeId": "store-mine",
+    "kind": "initial_build",
+    "targetLevel": 1,
+    "templateId": "minetenant:store/lv1",
+    "leaseToken": "bjl_4Qk8svjY02OfwQX5V8lWqvK9C1y9-A3J2hP7fE6dR0w",
+    "leaseExpiresAt": "2026-11-25T08:01:00.000000Z"
+  }
+}
+```
+
+leaseはDB時刻から60秒です。tokenは32 byteの暗号学的乱数をbase64url化して`bjl_`を付けた値で、
+responseで一度だけ返し、DBにはSHA-256 hashだけを保存します。claimは`created_at, build_job_id`順で、
+前段levelが未完了のjobを飛ばします。2 pollerは`FOR UPDATE SKIP LOCKED`を使い、同じleaseを取得しません。
+
+期限切れjobは同じ`jobId`、新しいtoken、更新した期限で再claimし、attemptを1増やします。5回目のleaseも
+ACKされず期限切れになった場合は`failed / LEASE_RETRY_EXHAUSTED`へ移し、次のjobを選びます。
+期限前のjobと`completed / failed`はclaimしません。
+
+### Fabric Serverによる結果ACK
+
+```http
+POST /api/v1/minecraft/build-jobs/{jobId}/ack
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+Content-Type: application/json
+```
+
+成功時は次のbodyです。
+
+```json
+{
+  "leaseToken": "bjl_4Qk8svjY02OfwQX5V8lWqvK9C1y9-A3J2hP7fE6dR0w",
+  "result": "completed"
+}
+```
+
+建築前の検証で拒否した場合も、world適用の途中で失敗した場合も成功扱いにせず、許可済みcodeを送ります。
+
+```json
+{
+  "leaseToken": "bjl_4Qk8svjY02OfwQX5V8lWqvK9C1y9-A3J2hP7fE6dR0w",
+  "result": "failed",
+  "failureCode": "PLOT_NOT_READY"
+}
+```
+
+`failureCode`は`BuildJobView`の`LEASE_RETRY_EXHAUSTED`以外の5値だけを受けます。`completed`では
+`failureCode`を含めず、`failed`では必須です。未知field、未知code、組合せ不正は422です。
+
+有効期限内の現在leaseだけが状態をterminalへ進めます。初回と同じ`jobId`・token・result・
+`failureCode`のACK再送は200で同じ結果を返し、日時やretry回数を更新しません。
+
+```json
+{
+  "data": {
+    "jobId": "0d98d85e-baa6-4e7f-986c-85ac3ad82921",
+    "status": "completed",
+    "failureCode": null,
+    "updatedAt": "2026-11-25T08:00:04.000000Z"
+  }
+}
+```
+
+異なるtoken、古いlease、terminal結果と異なる再送は409です。ACKはStoreのpoints・論理levelを
+変更しません。
+
+Fabric Serverはworld適用結果をACK送信前に永続outboxへ保存し、200を確認するまで同じ
+`jobId / leaseToken / result / failureCode`を有限回・backoff付きで再送します。追加の`ackId`は使いません。
+lease切れ後にjobを再取得した場合は、永続済み`jobId`からworld変更済みかを判定し、新しいtokenで結果を
+ACKします。
+
+### failed jobのWeb再試行
+
+```http
+POST /api/v1/build-jobs/{jobId}/retry
+X-XSRF-TOKEN: CookieをURLデコードした値
+```
+
+Cookie session、CSRF検証、jobのStore所有権が必要です。`failed`を同じ`jobId`の`pending`へ戻し、
+lease hash・期限・failure codeを消し、attemptを0へ戻して`retryCount`を1増やします。新しいjobは
+作りません。成功後の同じrequestで`pending`を再度指定しても200で同じ状態を返し、`retryCount`を
+再加算しません。`leased / completed`は409です。
+
+### errorと判定順
+
+| Status | code                               | 条件                                              |
+| -----: | ---------------------------------- | ------------------------------------------------- |
+|    401 | `FABRIC_AUTHENTICATION_FAILED`     | Minecraft endpointのServer認証失敗                |
+|    403 | `BUILD_JOB_FORBIDDEN`              | Web Userが別Storeのjobを指定                      |
+|    404 | `BUILD_JOB_NOT_FOUND`              | jobが存在しない                                   |
+|    409 | `STORE_LEVEL_NOT_READY`            | 次の建築levelへpointsが未到達                     |
+|    409 | `BUILD_TEMPLATE_NOT_AVAILABLE`     | 到達levelに承認済みtemplateがない                 |
+|    409 | `BUILD_PREREQUISITE_NOT_COMPLETED` | Lv1の商品がない、または前段levelの建築が未完了    |
+|    409 | `BUILD_JOB_ALREADY_ACTIVE`         | `pending / leased`のjobがある                     |
+|    409 | `BUILD_JOB_RETRY_REQUIRED`         | `failed` jobがありretry endpointを使う必要がある  |
+|    409 | `BUILD_JOB_LEASE_EXPIRED`          | ACK時点でlease期限切れ                            |
+|    409 | `BUILD_JOB_LEASE_CONFLICT`         | token不一致、古いlease、別jobのtoken              |
+|    409 | `BUILD_JOB_STATE_CONFLICT`         | terminal結果の変更、leased/completedへのWeb retry |
+
+Web書込みは認証、CSRF、body形式、所有権、現在状態、level・template可否の順に判定します。Minecraft
+endpointはFabric認証、path/body形式、job存在、token、現在状態、lease期限の順です。error responseやlogへ
+lease token/hash、Fabric token、座標、NBT、内部exceptionを含めません。
+
+### 実装Issueの必須確認
+
+- 作成: 最初の出品でLv1が1件、2件目・再送・同時出品で増えず、level到達だけでは増築を作らない。
+- 明示成長: 未到達、前段未完了、templateなし、同時操作、同じ`requestId`再送を確認する。
+- claim: 0件、1件、2 poller、前段level未完了、期限直前・直後、5回失効をDB時刻で確認する。
+- ACK: 成功、失敗、同内容再送、誤token、古いtoken、期限切れ、terminal結果変更を確認する。
+- Web GET: jobなしと全4状態、他Store非表示、10回GETでjob・lease・attempt不変を確認する。
+- Web retry: failedだけを同じIDでpendingへ戻し、連打・同時requestでもretry 1回分にする。
+- Mod境界: 固定plot外を変更せず、同じjobIdの再配送・Server再起動でworldを二重変更しない。
+- 秘密境界: Front WorkerはMinecraft pathを公開せず、Client JAR / packetへFabric・lease tokenを含めない。
 
 ## Fabric商品一覧
 

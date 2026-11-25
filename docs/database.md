@@ -9,7 +9,7 @@
 - username認証の本番切り替え手順: [`auth-cutover.md`](./auth-cutover.md)
 
 対象は`users`、`stores`、`products`、`purchase_transactions`、`minecraft_links`、
-`minecraft_link_codes`です。建築jobは別の契約Issueで扱います。
+`minecraft_link_codes`、`minecraft_build_jobs`です。
 
 用語: `migration`はDBの構造や既存データを新しい形へ移す処理、`index`は検索を速くする仕組み、`外部キー`は別tableに存在するIDだけを保存できる制約です。
 
@@ -20,6 +20,7 @@
 - [User](#users)
 - [Minecraftアカウント連携](#minecraft_links)
 - [Minecraft連携code](#minecraft_link_codes)
+- [Minecraft建築job](#minecraft_build_jobs)
 - [Store](#stores)
 - [Product](#products)
 - [取引](#purchase_transactions)
@@ -38,6 +39,7 @@ DBのID列は最終ER図に合わせ、entityを含む主キー名と役割が�
 | `hono_sessions`         | `session_id`     | `user_id`                          |
 | `minecraft_links`       | `user_id`        | `user_id`                          |
 | `minecraft_link_codes`  | `code_id`        | `user_id`                          |
+| `minecraft_build_jobs`  | `build_job_id`   | -                                  |
 
 公開HTTP APIのJSON名は既存契約を維持します。DB row typeは物理名をそのまま使用し、serializerで
 `user_id` / `store_id` / `product_id` / `transaction_id`を`id`へ、Storeの`user_id`を`ownerId`へ、
@@ -82,6 +84,7 @@ view・trigger・routine・event、改名対象table上の式やpartitionなど�
 | Webアカウント      | email / `name` / `password`   | `username` / `display_name` / `password_hash`。emailは削除     |
 | User表示用field    | DB列へ保存                    | `roleLabel`と`avatarInitial`はserializerで導出                 |
 | Minecraft連携      | なし                          | UserとUUIDの1対1link、短期・1回限りのcodeを保存                |
+| Minecraft建築job   | なし                          | 許可済みtemplateだけをat-least-onceでlease配送                 |
 
 ID列は上記の最終物理名を前提とし、業務機能のmigrationで別名へ戻しません。
 
@@ -104,16 +107,22 @@ ID列は上記の最終物理名を前提とし、業務機能のmigrationで別
 | User表示値をserializerで導出                     | 権限labelとavatarの保存値がrole・displayNameからずれるのを防ぐため           |
 | UserとMinecraft UUIDを1対1にする                 | 同じWebアカウントやMinecraftアカウントが複数の相手へ紐付かないようにするため |
 | raw連携codeを保存しない                          | DBやbackupの閲覧だけで有効codeを利用できないようにするため                   |
+| 論理level到達だけで増築jobを作らない             | 店主が選んだ時点までMinecraft店舗を自動で変化させないため                    |
+| lease tokenはhashだけ保存                        | DBやbackupから有効なACK資格情報を再利用できないようにするため                |
+| 建築済みlevelをjobから導出                       | points由来levelとworldへ適用済みlevelを混同せず、二重建築を防ぐため          |
 
 ## API error codeとの対応
 
-| Status | code                      | DBを変更するか |
-| ------ | ------------------------- | -------------- |
-| 409    | `REQUEST_ID_CONFLICT`     | 変更しない     |
-| 409    | `LISTING_REQUEST_RETIRED` | 変更しない     |
-| 409    | `USER_STORE_NOT_READY`    | 変更しない     |
-| 409    | `OUT_OF_STOCK`            | 変更しない     |
-| 422    | `SELF_PURCHASE`           | 変更しない     |
+| Status | code                       | DBを変更するか |
+| ------ | -------------------------- | -------------- |
+| 409    | `REQUEST_ID_CONFLICT`      | 変更しない     |
+| 409    | `LISTING_REQUEST_RETIRED`  | 変更しない     |
+| 409    | `USER_STORE_NOT_READY`     | 変更しない     |
+| 409    | `OUT_OF_STOCK`             | 変更しない     |
+| 422    | `SELF_PURCHASE`            | 変更しない     |
+| 409    | `BUILD_JOB_ALREADY_ACTIVE` | 変更しない     |
+| 409    | `BUILD_JOB_LEASE_EXPIRED`  | 変更しない     |
+| 409    | `BUILD_JOB_LEASE_CONFLICT` | 変更しない     |
 
 HTTP responseの本文は[`docs/api.md`](./api.md)を正本とします。
 
@@ -373,6 +382,105 @@ code消費は、最初の`code_hash`検索で得た`user_id`のUser行、同じc
 同じcodeの同時consumeは成功1件だけで、
 敗者は使用済みerrorになります。UUID競合・User競合・SQL失敗ではlinkも`consumed_at`も変更しません。
 
+## `minecraft_build_jobs`
+
+Minecraft worldへ適用する初回店舗建築と増築をat-least-onceで配送します。任意座標、dimension、block列、
+NBT、command、Fabric tokenは保存しません。Fabric Serverは`store_id`をServer登録済みの固定plotへ
+解決します。
+
+| 列                   | 型                                                   | NULL | default                                               | 説明                                    |
+| -------------------- | ---------------------------------------------------- | ---- | ----------------------------------------------------- | --------------------------------------- |
+| `build_job_id`       | `CHAR(36) CHARACTER SET ascii COLLATE ascii_bin`     | 不可 | なし                                                  | PK、lowercase hyphen形式のUUID v4       |
+| `store_id`           | `VARCHAR(255)`                                       | 不可 | なし                                                  | `stores.store_id`へのFK                 |
+| `job_kind`           | `VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin`  | 不可 | なし                                                  | `initial_build` / `level_upgrade`       |
+| `target_level`       | `SMALLINT UNSIGNED`                                  | 不可 | なし                                                  | worldへ適用する建築level                |
+| `template_id`        | `VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin`  | 不可 | なし                                                  | Backend / Modで承認済みのtemplate識別子 |
+| `trigger_kind`       | `VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin`  | 不可 | なし                                                  | `initial_listing` / `manual_request`    |
+| `trigger_request_id` | `VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin` | 不可 | なし                                                  | 作成操作の未加工requestId               |
+| `status`             | `VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin`  | 不可 | `pending`                                             | `pending / leased / completed / failed` |
+| `lease_token_hash`   | `BINARY(32)`                                         | 可   | `NULL`                                                | claimで返すtokenのSHA-256               |
+| `lease_expires_at`   | `TIMESTAMP(6)`                                       | 可   | `NULL`                                                | DB時刻で判定するlease期限               |
+| `attempt_count`      | `TINYINT UNSIGNED`                                   | 不可 | `0`                                                   | leaseを発行した回数、1回のcycleで最大5  |
+| `retry_count`        | `INT UNSIGNED`                                       | 不可 | `0`                                                   | 店主がfailed jobを再試行した回数        |
+| `failure_code`       | `VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin`  | 可   | `NULL`                                                | 許可済みの利用者向け失敗分類            |
+| `completed_at`       | `TIMESTAMP(6)`                                       | 可   | `NULL`                                                | 成功ACKを初回確定した日時               |
+| `failed_at`          | `TIMESTAMP(6)`                                       | 可   | `NULL`                                                | 失敗ACKまたはlease上限を確定した日時    |
+| `created_at`         | `TIMESTAMP(6)`                                       | 不可 | `CURRENT_TIMESTAMP(6)`                                | job作成日時                             |
+| `updated_at`         | `TIMESTAMP(6)`                                       | 不可 | `CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)` | 最終状態変更日時                        |
+
+### 制約とindex
+
+- `PRIMARY KEY (build_job_id)`
+- `minecraft_build_jobs_store_level_unique UNIQUE (store_id, target_level)`で同じ建築levelを二重作成しない。
+- `minecraft_build_jobs_trigger_unique UNIQUE (store_id, trigger_kind, trigger_request_id)`で同じ操作の
+  再送から別jobを作らない。
+- `minecraft_build_jobs_claim_index (status, lease_expires_at, created_at, build_job_id)`をclaimに使う。
+- `minecraft_build_jobs_store_latest_index (store_id, created_at, build_job_id)`をWeb状態GETに使う。
+- `minecraft_build_jobs_store_id_foreign`は`stores.store_id`を参照し、`ON DELETE RESTRICT`とする。
+- `build_job_id`はlowercase hyphen形式のUUID v4、`trigger_request_id`は
+  `[A-Za-z0-9._:-]{1,100}`だけを許可する。
+- `job_kind / trigger_kind / target_level / template_id`は次の組合せだけを許可する。
+  - `initial_build / initial_listing / 1 / minetenant:store/lv1`
+  - `initial_build / manual_request / 1 / minetenant:store/lv1`
+  - `level_upgrade / manual_request / 2 / minetenant:store/lv2_upgrade`
+- `attempt_count`は0〜5、`status`は`pending / leased / completed / failed`だけを許可する。
+- `failure_code`は次の値またはNULLだけを許可する。
+  - `TEMPLATE_NOT_AVAILABLE`
+  - `PLOT_NOT_REGISTERED`
+  - `PLOT_NOT_READY`
+  - `WORLD_APPLY_FAILED`
+  - `SERVER_STATE_CONFLICT`
+  - `LEASE_RETRY_EXHAUSTED`
+
+### 状態ごとの列
+
+| status      | lease hash / 期限 | completed_at | failed_at / failure_code |
+| ----------- | ----------------- | ------------ | ------------------------ |
+| `pending`   | 両方NULL          | NULL         | 両方NULL                 |
+| `leased`    | 両方必須          | NULL         | 両方NULL                 |
+| `completed` | 両方保持          | 必須         | 両方NULL                 |
+| `failed`    | 最後のleaseを保持 | NULL         | 両方必須                 |
+
+terminal状態でも最後の`lease_token_hash`を保持し、同じACKを200で再生できるようにします。tokenのraw値は
+保存しません。店主がfailed jobをretryすると`pending`へ戻し、lease列、failure列、terminal日時をNULL、
+`attempt_count`を0にし、`retry_count`だけを1増やします。`build_job_id`、Store、target、template、
+triggerは変更しません。
+
+### job作成と建築済みlevel
+
+最初の出品ではStore行をlockしたtransaction内でProduct、出品points、target Lv1 jobを一緒に作ります。
+同じ出品requestの再送、2件目以降、rollbackではjobを増やしません。DBのStore-level一意制約を最後の防壁にし、
+Product件数をlockなしで先読みしただけの初回判定は行いません。
+
+points更新はStoreの論理`level`だけを更新し、増築jobを自動作成しません。店主のWeb建築操作ではStoreと
+そのStoreのjobをlockし、`MAX(target_level WHERE status='completed')`を`builtLevel`として導出します。
+`builtLevel + 1`がStoreの論理level以下かつtemplate whitelist内の場合だけ、次のlevelを1件作ります。
+Lv1を明示作成する場合はsoft delete済みを含むProductがStoreに1件以上あり、出品履歴を確認できることも
+必要です。target levelやtemplateはrequestから受けません。
+
+契約導入時は既存Storeへjobを自動backfillしません。既存ProductがあるStoreにLv1 jobがない場合は、店主の
+明示操作で`initial_build / manual_request`を作成します。これによりmigrationだけでMinecraft worldが
+予告なく変更される状態を避けます。
+
+現在のwhitelistはLv1とLv2だけです。Storeが論理Lv3〜5でも、Lv2完成後は承認済みtemplateが追加されるまで
+新しいjobを作りません。建築済みlevelはStore列へ複製せず、completed jobから導出します。
+
+### claim、lease、ACK
+
+claimはDB transaction内で、`pending`または期限切れ`leased`のうち、同じStoreの全lower targetが
+`completed`である先頭1件を`FOR UPDATE SKIP LOCKED`します。DB現在時刻を一度取得し、32 byteの乱数tokenの
+SHA-256、60秒後の期限、増加後のattemptを保存してcommitした後、raw tokenをresponseで一度だけ返します。
+2 pollerは同じrowを取得しません。
+
+期限切れ再claimは同じjob IDのまま新tokenへ交換します。5回目のleaseもACKされず期限切れになったjobは
+`failed`、`failure_code='LEASE_RETRY_EXHAUSTED'`へ一度だけ遷移させます。claimやACKの期限判定はapplication
+clockではなく、transactionで取得した同じDB時刻を使います。
+
+ACKはjob rowをlockし、受信tokenのSHA-256、`leased`、期限を検証します。有効な現在leaseだけを
+`completed`または`failed`へ遷移させ、同じtokenと同じ結果の再送は日時を更新せず同じ結果を返します。
+古いtoken、別jobのtoken、期限切れ、terminal結果の変更はDBを変更しません。ACKとWebの状態GETはStoreの
+points・論理levelを変更しません。
+
 ## `stores`
 
 全ユーザーは登録時に一つのStoreを持ち、`user_id`は一意です。pointsの加算先はクライアント入力では
@@ -406,8 +514,9 @@ code消費は、最初の`code_hash`検索で得た`user_id`のUser行、同じc
 
 pointsを更新するtransactionでは、lock取得直後のpointsから`oldLevel`を、加算後のpointsから
 `newLevel`を計算し、pointsと`newLevel`を同時に保存します。`oldLevel < newLevel`の場合だけ、その結果を
-B-BUILD-03へ渡します。同じ`request_id`の再送、入力不正、競合、rollbackではlevel変更を発生させません。
-1回の加算で複数境界を越えた場合のjob単位はB-CONTRACT-06を正本とします。
+成長到達として扱いますが、points更新transactionでは増築jobを作りません。同じ`request_id`の再送、
+入力不正、競合、rollbackではlevel変更を発生させません。Minecraftの増築は、店主がWebから明示操作した
+時点で`minecraft_build_jobs`のcompleted levelと現在levelを比較して次の1段だけ作ります。
 
 登録時は`points=0`、`level=1`です。既存Storeのpointsはbackfillや上限切り捨てをせず維持し、移行時に
 全行のlevelをpointsから再計算します。不一致が見つかった場合はpointsを正としてlevelを修復します。
@@ -790,6 +899,6 @@ fix-forwardで再開します。
 
 - 認証の移行順と旧列の削除時期は[`auth-cutover.md`](./auth-cutover.md)にまとめています。
 - 商品の公開条件、購入時の状態変更、ポイント加算は各tableの節を参照してください。
-- Minecraftの認証・連携・建築job用tableは、別の契約Issueで定義します。
+- Minecraft認証・連携・建築jobは、それぞれのtable節と[`api.md`](./api.md)を正本にします。
 
 Issueの作業順は[B00](https://github.com/IH-Ggroup/minetenant-backend/issues/38)を参照してください。
