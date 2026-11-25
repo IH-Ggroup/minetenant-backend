@@ -42,9 +42,12 @@ MySQL管理ユーザー（初期値は`root`）のパスワード入力が表示
 既存DBのtrigger追加migrationでも、DBとユーザーは`IF NOT EXISTS`で確認し、
 接続用ユーザーのパスワード、既存テーブル、既存データは変更しません。
 
-初回に作る`.env`には、このclone専用のランダムなDBユーザー名とパスワードを生成します。
+初回に作る`.env`には、このclone専用のランダムなDBユーザー名・パスワードと、
+Fabric Dedicated Server認証用tokenを生成します。
 そのため、PCに同名ユーザーが残っていても上書きせず、別cloneの接続も壊しません。
-DB・テーブル・既存データは上書きせず、既存の`.env`がある場合は内容を一切変更しません。
+DB・テーブル・既存データは上書きしません。既存のローカル`.env`では、
+`MINETENANT_FABRIC_SERVER_TOKEN`が未記載または空の場合だけ、64文字のtokenを一度補完します。
+設定済みのtokenやDB接続値など、その他の値は変更しません。
 登録済みmigrationで解消できない設定不一致やスキーマ不一致は、
 勝手に修復せず診断を表示して停止します。
 
@@ -54,10 +57,19 @@ CIなど対話入力できない環境だけ`MYSQL_ADMIN_PASSWORD`も設定で�
 MySQL本体のインストールやOSサービスの起動は自動化しません。MySQLが停止している場合は、
 安全のためDB操作をせず、起動を案内して終了します。
 
+`npm run dev`によるtokenの自動補完は`APP_ENV=local`だけです。productionなどで手動設定する場合は、
+次で64文字のtokenを生成し、BackendのsecretとFabric Dedicated Serverのserver専用設定へ
+同じ値を登録してください。Client JARやWebへは登録しません。
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
 ### 既にDBを準備済みの場合
 
-既存環境や更新取り込み後も`npm run dev`だけです。既存の`.env`を上書きせず、
-接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
+既存環境や更新取り込み後も`npm run dev`だけです。既存のDB接続値などは上書きせず、
+ローカル用Fabric tokenだけを必要に応じて補完します。その後、接続・スキーマを診断し、
+未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
 認証APIはusername方式だけを受け付けます。registerは`username`・任意の`displayName`・
@@ -91,6 +103,7 @@ Windows PowerShellでは`$env:PORT="8788"; npm run dev`です。
 | `MINETENANT_PRODUCT_STATUS_MIGRATION_UNSAFE`                           | 商品状態のdata・schema・trigger前提が不一致                                | 書き込みを停止してbackup。ローカルは`npm run db:bootstrap`、共有DBは管理者と前提を確認                                     |
 | `MINETENANT_AUTH_SCHEMA_MIGRATION_UNSAFE`                              | username移行schema・index・履歴の前提が不一致                              | 書き込みを停止してbackupし、履歴と実schemaを確認。未記録なら修復後にmigrationを再実行                                      |
 | `MINETENANT_AUTH_BACKFILL_DATA_INVALID` / `MINETENANT_AUTH_BACKFILL_*` | username移行dataまたは専用connection・lockの検証に失敗                     | 書込停止・backup。migration未記録ならdata修復後に再実行し、記録済みなら[runbook](docs/auth-cutover.md)のcheck/reportで診断 |
+| `CONFIGURATION_ERROR`                                                  | Fabric Server認証tokenが未設定または形式不正                               | `.env`の`MINETENANT_FABRIC_SERVER_TOKEN`へ64〜256文字の空白なしASCII tokenを設定                                           |
 | `MINETENANT_SCHEMA_INCOMPLETE`                                         | 適用済み履歴に対して必須テーブルが不足                                     | DBをバックアップして履歴と実schemaを調査                                                                                   |
 | `MINETENANT_SCHEMA_MISMATCH`                                           | 適用済み履歴に対して永続監査table・列・一意制約・triggerが不足または不一致 | DBをバックアップして履歴と実schemaを調査                                                                                   |
 
@@ -127,7 +140,7 @@ bcryptパスワード（`$2b$`・`$2y$`）を照合できます。
 - WebとMinecraftの共通在庫、購入履歴、購入後の店舗ポイント／レベル更新
 - `requestId`による再送の重複防止と別購入への再使用の拒否
 - 在庫減少・取引作成・店舗成長を一つのMySQLトランザクションで更新
-- 公開デモ用の秘密値確認、Minecraft API等の公開経路での遮断
+- 公開デモ用の秘密値確認、Fabric Dedicated Server資格情報によるMinecraft APIの保護
 
 ORMや汎用Repository層は追加せず、`mysql2`のパラメーター付きSQLと
 小さなServiceで構成しています。購入は行ロックで保護し、
@@ -212,6 +225,7 @@ APP_DEBUG=false
 APP_URL=https://YOUR-FRONTEND.workers.dev
 MINETENANT_PUBLIC_TUNNEL=true
 MINETENANT_ORIGIN_TOKEN=32文字以上のランダムな秘密値
+MINETENANT_FABRIC_SERVER_TOKEN=64〜256文字のランダムな秘密値
 SESSION_SECURE_COOKIE=true
 SESSION_DOMAIN=null
 SESSION_SAME_SITE=lax
@@ -222,6 +236,8 @@ Workerは同じ秘密値を`X-MineTenant-Origin-Token`で送信します。
 Honoは秘密値確認後のループバック経由でのみこの値を信用します。
 Cookie転送を利用できます。Honoの起動には`npm start`または`npm run dev`を使ってください。
 
-Minecraft専用APIは現在ローカルの未認証デモ仕様で、公開モードでは遮断します。
-Fabric Dedicated Server認証の最終契約は[`docs/api.md`](./docs/api.md#fabric-dedicated-server認証)に
-定義済みで、B-MC-AUTH-01 #62が実装します。決済・配送・画像アップロードは含みません。
+Minecraft専用APIはローカルでHonoへ直接接続する場合もFabric Dedicated Server認証が必要です。
+現在の公開モードとFront WorkerではMinecraft専用APIを許可せず、404を返します。
+公開する場合は、Workerの転送契約・エッジ側の試行制限・統合テストを別タスクで揃えます。
+認証契約とtoken更新手順は[`docs/api.md`](./docs/api.md#fabric-dedicated-server認証)を参照してください。
+決済・配送・画像アップロードは含みません。

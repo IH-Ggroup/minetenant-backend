@@ -6,6 +6,7 @@ import { readConfig, type AppConfig } from './config.js';
 import { createDatabase, type Database } from './db.js';
 import { assertMigrationsCurrent, migrations } from './db/migrations/index.js';
 import { formatErrorForLog } from './diagnostics.js';
+import { assertFabricServerTokenConfigured } from './fabric-auth.js';
 import {
   assertDatabaseReady,
   assertDatabaseServerSupported,
@@ -29,6 +30,7 @@ export async function start(
   let config;
   try {
     config = dependencies.readConfig();
+    assertFabricServerTokenConfigured(config);
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : '設定を確認してください。';

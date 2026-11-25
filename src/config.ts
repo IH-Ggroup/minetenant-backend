@@ -18,6 +18,7 @@ export interface AppConfig {
   corsOrigins: string[];
   publicTunnel: boolean;
   originToken: string;
+  fabricServerToken: string;
   salePoints: number;
 }
 
@@ -84,6 +85,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       .filter(Boolean),
     publicTunnel: env.MINETENANT_PUBLIC_TUNNEL === 'true',
     originToken: env.MINETENANT_ORIGIN_TOKEN ?? '',
+    fabricServerToken: env.MINETENANT_FABRIC_SERVER_TOKEN ?? '',
     salePoints: Math.max(
       0,
       integer(env.STORE_SALE_POINTS, 100, -4294967295, 4294967295),

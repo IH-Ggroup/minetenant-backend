@@ -66,28 +66,85 @@ describe('dependency-free development preflight', () => {
     });
   });
 
-  it('creates .env once and never overwrites an existing environment', async () => {
+  it('creates .env once and adds a missing local Fabric token without changing existing values', async () => {
     const directory = await temporaryDirectory();
     await writeFile(
       join(directory, '.env.example'),
-      'DB_USERNAME=minetenant\nDB_PASSWORD=example\n',
+      'APP_ENV=local\nDB_USERNAME=minetenant\nDB_PASSWORD=example\nMINETENANT_FABRIC_SERVER_TOKEN=\n',
     );
 
     await expect(ensureEnvFile(directory)).resolves.toBe('created');
     const generated = await readFile(join(directory, '.env'), 'utf8');
     expect(generated).toMatch(/DB_USERNAME=minetenant_dev_[a-f0-9]{12}/);
     expect(generated).not.toContain('DB_PASSWORD=example');
-    await writeFile(join(directory, '.env'), 'DB_PASSWORD=local-secret\n');
-    await expect(ensureEnvFile(directory)).resolves.toBe('preserved');
+    expect(parseEnvFile(generated).MINETENANT_FABRIC_SERVER_TOKEN).toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+
+    await writeFile(
+      join(directory, '.env'),
+      'APP_ENV=local\nDB_PASSWORD=local-secret\n',
+    );
+    await expect(
+      ensureEnvFile(directory, () => Buffer.alloc(32, 0xab)),
+    ).resolves.toBe('updated');
+    const updated = await readFile(join(directory, '.env'), 'utf8');
+    expect(updated).toContain('DB_PASSWORD=local-secret\n');
+    expect(parseEnvFile(updated).MINETENANT_FABRIC_SERVER_TOKEN).toBe(
+      'ab'.repeat(32),
+    );
+
+    await writeFile(
+      join(directory, '.env'),
+      'APP_ENV=local\nMINETENANT_FABRIC_SERVER_TOKEN=""\n',
+    );
+    await expect(
+      ensureEnvFile(directory, () => Buffer.alloc(32, 0xcd)),
+    ).resolves.toBe('updated');
+    const filled = await readFile(join(directory, '.env'), 'utf8');
+    expect(parseEnvFile(filled).MINETENANT_FABRIC_SERVER_TOKEN).toBe(
+      'cd'.repeat(32),
+    );
+  });
+
+  it('preserves an existing Fabric token and does not generate one for a non-local environment', async () => {
+    const directory = await temporaryDirectory();
+    await writeFile(
+      join(directory, '.env.example'),
+      'APP_ENV=local\nDB_USERNAME=minetenant\nDB_PASSWORD=example\nMINETENANT_FABRIC_SERVER_TOKEN=\n',
+    );
+    const randomMustNotRun = () => {
+      throw new Error('random token generation must not run');
+    };
+
+    const configured =
+      'APP_ENV=local\nMINETENANT_FABRIC_SERVER_TOKEN=existing-secret\n';
+    await writeFile(join(directory, '.env'), configured);
+    await expect(ensureEnvFile(directory, randomMustNotRun)).resolves.toBe(
+      'preserved',
+    );
     await expect(readFile(join(directory, '.env'), 'utf8')).resolves.toBe(
-      'DB_PASSWORD=local-secret\n',
+      configured,
+    );
+
+    const production = 'APP_ENV=production\nDB_PASSWORD=production-secret\n';
+    await writeFile(join(directory, '.env'), production);
+    await expect(ensureEnvFile(directory, randomMustNotRun)).resolves.toBe(
+      'preserved',
+    );
+    await expect(readFile(join(directory, '.env'), 'utf8')).resolves.toBe(
+      production,
     );
   });
 
   it('generates MySQL-safe clone credentials without logging or reusing template secrets', () => {
-    const values = [Buffer.alloc(6, 0xab), Buffer.alloc(24, 0xcd)];
+    const values = [
+      Buffer.alloc(6, 0xab),
+      Buffer.alloc(24, 0xcd),
+      Buffer.alloc(32, 0xef),
+    ];
     const generated = envWithUniqueDatabaseCredentials(
-      'DB_USERNAME=minetenant\nDB_PASSWORD=minetenant\n',
+      'DB_USERNAME=minetenant\nDB_PASSWORD=minetenant\nMINETENANT_FABRIC_SERVER_TOKEN=\n',
       () => values.shift(),
     );
     const settings = parseEnvFile(generated);
@@ -95,6 +152,7 @@ describe('dependency-free development preflight', () => {
     expect(settings.DB_USERNAME).toMatch(/^[A-Za-z0-9_]{1,32}$/);
     expect(settings.DB_PASSWORD).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(settings.DB_PASSWORD).not.toBe('minetenant');
+    expect(settings.MINETENANT_FABRIC_SERVER_TOKEN).toBe('ef'.repeat(32));
   });
 
   it('detects only a complete runtime install', async () => {

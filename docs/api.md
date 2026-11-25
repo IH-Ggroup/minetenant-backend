@@ -16,8 +16,9 @@ camelCaseで返します。
 > この節の「移行順と互換期間」も参照してください。取引履歴は現行実装の説明です。
 > ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
 > 店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
-> Fabric専用APIの認証はB-CONTRACT-03で確定する最終契約です。`develop`では公開モードから
-> Minecraft routeを遮断し、ローカルでは未認証のままです。B-MC-AUTH-01 #62でこの契約を実装します。
+> Fabric専用APIの認証はB-CONTRACT-03で確定し、B-MC-AUTH-01 #62で実装する契約です。
+> ローカルでHonoへ直接接続するMinecraft routeにはFabric Dedicated Server認証が必要です。
+> 現在の公開モードとFront WorkerではMinecraft routeを公開しません。
 
 ## 現行から確定契約への変更
 
@@ -64,8 +65,7 @@ DBの列・制約・移行規則は[`database.md`](./database.md)を参照して
 - ログイン・登録の試行制限: `429 Too Many Requests`
 - Web認証: MySQLに保存するCookieセッション
 - WebのすべてのPOST・DELETEは、ログイン・登録も含めてCSRF検証の対象
-- Minecraft専用APIは最終的にFabric Dedicated Server専用のBearer認証を使う。#62完了までは
-  ローカルの未認証デモ仕様で、公開モードからは遮断する
+- Minecraft専用APIはFabric Dedicated Server専用のBearer認証を使う
 - メッセージ・チャットAPIは作らない
 
 B-CONTRACT-01以後に作る出品・購入の`requestId`はcase-sensitiveな
@@ -1273,7 +1273,8 @@ VITE_API_BASE_URL=http://localhost:8787/api/v1
 
 既定の起動設定はループバック限定です。別PCにあるAPIへURLだけを変更しても
 接続できません。Cookie用のホスト名と開発環境の通信経路もそろえる必要があります。
-Minecraft側に未認証APIが残るため、このPoCをインターネットに公開しないでください。
+インターネットへ公開する場合はREADMEの公開設定に従い、WorkerのOrigin認証と
+Fabric Dedicated Server認証を有効にします。Honoのportを直接公開しないでください。
 
 ### fetchヘルパー
 
@@ -1450,29 +1451,22 @@ Frontend #94はこの契約を前提に実API接続するため、結合時に�
 
 ## Fabric Dedicated Server認証
 
-この節はB-CONTRACT-03の正本です。B-MC-AUTH-01 #62が実装する最終契約を示します。
+この節はB-CONTRACT-03の正本であり、B-MC-AUTH-01 #62の実装仕様です。
 Client JARやWebブラウザからMinecraft専用APIを直接呼びません。
 
-### 現在の公開境界
+### 公開境界
 
-公開モードではCloudflare Workerだけが`MINETENANT_ORIGIN_TOKEN`を持ち、Honoへ
-`X-MineTenant-Origin-Token`を付けてWeb APIを転送します。Minecraft routeは公開allowlistに含まれず、
-正しいOriginトークンがあっても404です。公開モードを無効にしたローカル開発環境では、現在の
-Minecraft routeへ認証なしで到達できます。
-
-```mermaid
-flowchart LR
-  Browser[Webブラウザ] -->|Cookie + CSRF| Worker[Cloudflare Worker]
-  Worker -->|X-MineTenant-Origin-Token| WebApi[Hono Web API]
-  Worker -. 404で遮断 .-> MinecraftApi["/api/v1/minecraft/**"]
-  LocalFabric[ローカルのFabric Server] -->|現在は未認証| MinecraftApi
-```
+現在のCloudflare WorkerはMinecraft routeを転送対象に含めず、受信した`Authorization`も
+Backendへ転送しません。Backendの公開モードでもMinecraft routeをallowlistに含めないため、
+正しいOriginトークンとFabric tokenが揃っていても404です。#62ではこの公開境界を変更しません。
+公開モードを無効にしてHonoへ直接接続するローカル開発環境でも、Fabric認証は省略しません。
 
 `X-MineTenant-Origin-Token`はWorkerからHonoまでの公開経路を守る資格情報であり、
 Fabric Serverの識別には使いません。Fabric認証と同じ値を設定せず、Fabric ServerやClient JARへ
-Originトークンを配布しません。
+Originトークンを配布しません。Minecraft routeを将来公開する場合は、Frontend側の明示的なroute追加、
+`Authorization`の安全な転送、エッジ側の試行制限、三リポジトリを通す統合テストを同時に実装します。
 
-### #62実装後の認証境界
+### Fabric認証境界
 
 Fabric Dedicated Serverだけが`MINETENANT_FABRIC_SERVER_TOKEN`を保持し、すべての
 `/api/v1/minecraft/**` requestへ次のheaderを付けます。Webのsession CookieとCSRF tokenは
@@ -1485,14 +1479,23 @@ Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
 ```mermaid
 flowchart LR
   Client[Fabric Client JAR] -->|tokenなし| Server[Fabric Dedicated Server]
-  Server -->|Authorization: Bearer token| Worker[Cloudflare Worker]
-  Worker -->|Authorizationを保持 + Origin headerを追加| Api["Hono /api/v1/minecraft/**"]
+  Server -->|Authorization: Bearer token / ローカル直結| MinecraftApi["Hono /api/v1/minecraft/**"]
+  Server -. 現在の公開経路 .-> Worker[Cloudflare Worker]
+  Worker -. 404 / 転送対象外 .-> Blocked[Minecraft API]
   Browser[Webブラウザ] -->|Cookie + CSRF| Worker
+  Worker -->|Origin header| WebApi[Hono Web API]
 ```
 
-公開経路では二つの境界を順番に通します。Workerは`Authorization`を変更せず、Hono向けの
-`X-MineTenant-Origin-Token`を追加します。Fabric ServerがOriginトークンを保持する必要はありません。
-公開モードを使わないローカル環境でもFabric認証は省略しません。
+Fabric ServerがOriginトークンを保持する必要はありません。公開モードを使わないローカル環境では
+Origin認証だけを省略し、Fabric認証は維持します。
+
+### リポジトリ間の接続条件
+
+- FrontとWebブラウザにはFabric tokenを持たせない。現在のWorkerはMinecraft routeを404にする。
+- Modは共有Hono clientからすべてのMinecraft requestへ上記のBearer headerを付ける。
+- Backend #62だけを取り込んだ状態では、header未対応のModからのrequestは401になる。
+- Mod側のheader対応後にローカル直結を確認し、公開経路が必要になった時点でWorkerとBackendを
+  同じタスク範囲で公開する。
 
 Fabric認証middlewareはroute groupの先頭で、body parse、利用者や商品などの検索、業務DBのquery・更新より
 前に実行します。認証に失敗したrequestでは業務DBを読み書きせず、session Cookieも発行しません。
@@ -1766,8 +1769,8 @@ Fabric認証の後、(1) body形式、(2) codeの存在、(3) 使用済み、(4)
 
 ## Fabric商品一覧
 
-以下のpathは現在もローカル開発用の未認証APIで、#62が上記のFabric認証を実装します。
-Webのセッション認証・CSRF検証は適用しません。responseの各商品は共有の一点物Productなので、
+以下のpathには上記のFabric認証を適用し、Webのセッション認証・CSRF検証は適用しません。
+responseの各商品は共有の一点物Productなので、
 `stock`ではなく`status`を返し、`status: "sold"`の商品は購入できません。Web画面からはこちらを
 使わないでください。
 

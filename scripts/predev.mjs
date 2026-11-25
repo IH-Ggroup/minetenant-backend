@@ -19,6 +19,7 @@ const BOOTSTRAP_DIAGNOSTIC_CODES = new Set([
 // ordinary additive migrations continue to use the non-admin setup path.
 const ADMIN_PREPARED_MIGRATIONS = new Set(['0002_product_status']);
 const DEPENDENCY_SENTINEL = '.minetenant-package-lock.sha256';
+const FABRIC_SERVER_TOKEN_KEY = 'MINETENANT_FABRIC_SERVER_TOKEN';
 
 export class PredevFailure extends Error {
   constructor(message) {
@@ -58,11 +59,67 @@ export function envWithUniqueDatabaseCredentials(
       '安全なローカルDBユーザー名を生成できませんでした。',
     );
   }
-  return replaceEnvAssignment(
+  let contents = replaceEnvAssignment(
     replaceEnvAssignment(template, 'DB_USERNAME', username),
     'DB_PASSWORD',
     password,
   );
+  if (/^MINETENANT_FABRIC_SERVER_TOKEN=.*$/m.test(contents)) {
+    contents = replaceEnvAssignment(
+      contents,
+      'MINETENANT_FABRIC_SERVER_TOKEN',
+      createRandomBytes(32).toString('hex'),
+    );
+  }
+  return contents;
+}
+
+function envWithLocalFabricServerToken(
+  contents,
+  createRandomBytes = randomBytes,
+) {
+  const parsed = parseEnvFile(contents);
+  if ((parsed.APP_ENV ?? 'local') !== 'local') return contents;
+
+  const assignments = [
+    ...contents.matchAll(
+      /^\s*(?:export\s+)?MINETENANT_FABRIC_SERVER_TOKEN\s*=.*$/gm,
+    ),
+  ];
+  if (assignments.length > 1) {
+    throw new PredevFailure(
+      `.env に ${FABRIC_SERVER_TOKEN_KEY} が複数あります。1つにしてから再実行してください。`,
+    );
+  }
+  if (parsed[FABRIC_SERVER_TOKEN_KEY]) return contents;
+
+  const token = createRandomBytes(32).toString('hex');
+  if (assignments.length === 1) {
+    return contents.replace(
+      assignments[0][0],
+      `${FABRIC_SERVER_TOKEN_KEY}=${token}`,
+    );
+  }
+
+  const newline = contents.includes('\r\n') ? '\r\n' : '\n';
+  const separator =
+    contents.length === 0 || contents.endsWith('\n') ? '' : newline;
+  return `${contents}${separator}${FABRIC_SERVER_TOKEN_KEY}=${token}${newline}`;
+}
+
+async function updateExistingEnvFile(target, createRandomBytes) {
+  try {
+    const existing = await readFile(target, 'utf8');
+    const updated = envWithLocalFabricServerToken(existing, createRandomBytes);
+    if (updated === existing) return 'preserved';
+    await writeFile(target, updated, { flag: 'w' });
+    return 'updated';
+  } catch (error) {
+    if (error instanceof PredevFailure) throw error;
+    throw new PredevFailure(
+      '.env を確認できません。ファイルの内容と権限を確認してください。',
+    );
+  }
 }
 
 export async function ensureEnvFile(
@@ -71,6 +128,19 @@ export async function ensureEnvFile(
 ) {
   const source = join(projectRoot, '.env.example');
   const target = join(projectRoot, '.env');
+
+  try {
+    await readFile(target, 'utf8');
+    return await updateExistingEnvFile(target, createRandomBytes);
+  } catch (error) {
+    if (error instanceof PredevFailure) throw error;
+    if (error?.code !== 'ENOENT') {
+      throw new PredevFailure(
+        '.env を確認できません。ファイルの内容と権限を確認してください。',
+      );
+    }
+  }
+
   try {
     const template = await readFile(source, 'utf8');
     const contents = envWithUniqueDatabaseCredentials(
@@ -80,7 +150,8 @@ export async function ensureEnvFile(
     await writeFile(target, contents, { flag: 'wx', mode: 0o600 });
     return 'created';
   } catch (error) {
-    if (error?.code === 'EEXIST') return 'preserved';
+    if (error?.code === 'EEXIST')
+      return updateExistingEnvFile(target, createRandomBytes);
     throw new PredevFailure(
       '.env を作成できません。.env.example とファイル権限を確認してください。',
     );
@@ -358,6 +429,11 @@ async function main() {
   const projectRoot = process.cwd();
   const envState = await ensureEnvFile(projectRoot);
   if (envState === 'created') console.log('.env を作成しました。');
+  if (envState === 'updated') {
+    console.log(
+      '既存の.envにFabric Dedicated Server認証用tokenを追加しました。',
+    );
+  }
 
   if (!(await runtimeDependenciesCurrent(projectRoot))) {
     console.log(
