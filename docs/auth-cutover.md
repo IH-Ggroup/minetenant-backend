@@ -1,12 +1,26 @@
-# Username認証cutover runbook
+# Username認証への切り替え手順
 
-この文書は、email認証からusername認証へ本番trafficを切り替える手順の正本です。
-[B-CONTRACT-07 #96](https://github.com/IH-Ggroup/minetenant-backend/issues/96)が契約を確定し、
-[B-AUTH-CUTOVER #118](https://github.com/IH-Ggroup/minetenant-backend/issues/118)が最初のusername cutover、
-[B-AUTH-CONTRACT-CUTOVER #121](https://github.com/IH-Ggroup/minetenant-backend/issues/121)が互換削除releaseの
-実行と証跡を担当します。
-HTTP契約は[`api.md`](./api.md)、完成時schemaとbackfill規則は[`database.md`](./database.md)を正本とし、
-この手順をIssue本文や口頭手順へ複製しません。
+この手順書は、本番のログイン方式をemailからusernameへ切り替えるためのものです。切り替えには短時間の全APIメンテナンスが必要です。
+
+## 関連文書
+
+- APIのrequest / response: [`api.md`](./api.md)
+- DB列とデータ移行規則: [`database.md`](./database.md)
+- 最初の切り替え: Backend Issue [#118](https://github.com/IH-Ggroup/minetenant-backend/issues/118)
+- 古い認証方式の削除: Backend Issue [#121](https://github.com/IH-Ggroup/minetenant-backend/issues/121)
+
+この文書が本番作業の手順の正本です。Issueや別の手順書へコピーせず、ここを更新してください。
+
+用語: `cutover`は新方式へ切り替える作業、`runtime`は本番で実行中のAPI、`backfill`は既存行へ新しい列の値を埋める作業です。`rollback`は失敗時に前の状態へ戻すこと、`forward-fix`は戻さず修正を追加して復旧することです。
+
+## 手順の目次
+
+1. [開始条件](#適用範囲と前提)
+2. [既存ユーザーの確認・補完](#versioned-catch-up-command)
+3. [username認証への切り替え](#本番cutover)
+4. [旧認証方式の削除](#互換削除release)
+5. [失敗時の対応](#rollback)
+6. [テストと作業記録](#必須テストと証跡)
 
 ## 適用範囲と前提
 
