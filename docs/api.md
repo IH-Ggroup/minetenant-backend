@@ -45,6 +45,7 @@ DBの列・制約・移行規則は[`database.md`](./database.md)を参照して
 - [一点物商品・出品・購入](#一点物product)
 - [店舗・取引](#店舗)
 - [Webフロント接続例](#webフロントの接続例)
+- [Minecraftアカウント連携](#webアカウントとminecraft-uuidの連携)
 - [Fabric API](#fabric商品一覧)
 
 ## 共通仕様
@@ -224,6 +225,8 @@ B-CONTRACT-06を正本とします。`oldLevel`と`newLevel`は内部serviceの�
 | GET    | `/stores/{storeId}/dashboard`     | 所有者のみ     | 店舗集計、200 `data: Dashboard`                              |
 | GET    | `/transactions`                   | 必須           | 本人の購入・販売履歴、200 `data: Transaction[]`              |
 | GET    | `/transactions/{transactionId}`   | 取引関係者のみ | 取引詳細、200 `data: Transaction`                            |
+| POST   | `/minecraft-links/codes`          | 必須           | 短期連携code発行、201 `data: MinecraftLinkCodeIssued`        |
+| GET    | `/minecraft-links/codes/{codeId}` | 発行者本人のみ | 連携状態照会、200 `data: MinecraftLinkCodeStatus`            |
 
 `GET /api/hello`はv1の外にある疎通確認用APIです。商品編集・店舗編集・決済・
 住所保存のAPIはこのPoCには含みません。
@@ -1499,12 +1502,14 @@ Fabric認証middlewareはroute groupの先頭で、body parse、利用者や商�
 
 ### 保護するpath
 
-methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。現在の対象は次の2本です。
+methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。現在および
+B-CONTRACT-04で確定した対象は次のとおりです。
 
-| Method | path                          | 用途             |
-| ------ | ----------------------------- | ---------------- |
-| GET    | `/api/v1/minecraft/catalog`   | Fabric商品一覧   |
-| POST   | `/api/v1/minecraft/purchases` | Fabricからの購入 |
+| Method | path                              | 用途              |
+| ------ | --------------------------------- | ----------------- |
+| GET    | `/api/v1/minecraft/catalog`       | Fabric商品一覧    |
+| POST   | `/api/v1/minecraft/purchases`     | Fabricからの購入  |
+| POST   | `/api/v1/minecraft/links/consume` | Webアカウント連携 |
 
 アカウント連携や建築jobなどの後続Issueで追加するMinecraft routeも同じprefixの下へ置き、個別の
 認証付け忘れが起きないようroute group単位で保護します。`/up`、`/api/hello`、
@@ -1580,6 +1585,187 @@ headerなしと誤ったtokenは、資格情報の有無を推測させない同
 tokenそのものを確認記録へ貼らず、更新日時と確認結果だけを残します。認証失敗の再送では
 業務処理が始まらないため、DB更新や購入の重複は発生しません。認証成功後の再送は各endpointの
 `requestId`と冪等性契約に従います。
+
+## WebアカウントとMinecraft UUIDの連携
+
+この節はB-CONTRACT-04のAPI正本です。Webで短期codeを発行し、Fabric Dedicated Serverが
+接続中playerのUUIDと一度だけ紐付け、WebがREST pollingで結果を確認します。
+
+```mermaid
+sequenceDiagram
+  participant Web as Webブラウザ
+  participant API as Hono API
+  participant Server as Fabric Server
+  Web->>API: POST /minecraft-links/codes (Cookie + CSRF)
+  API-->>Web: codeId + code + expiresAt
+  Server->>API: POST /minecraft/links/consume (Bearer + 接続UUID)
+  API-->>Server: linked
+  Web->>API: GET /minecraft-links/codes/{codeId}
+  API-->>Web: pending / linked / expired
+```
+
+Webの発行・状態照会は内部sessionの`user_id`を使い、requestへuser ID、username、displayName、
+passwordを含めません。Fabric Serverのconsumeは「Fabric Dedicated Server認証」が必須で、
+Client JARからHonoへ直接送信しません。UUIDはServerが接続中playerから取得した
+`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`形式の小文字文字列だけを受け付けます。
+
+1ユーザー1UUID・1UUID1ユーザーです。すでに連携済みのユーザーへ新しいcodeを発行せず、
+consumeでも既存linkを別UUIDへ上書きしません。連携解除・UUID変更・管理者による再連携は別機能とし、
+今回のAPIには追加しません。
+
+### code形式と有効期限
+
+- `23456789ABCDEFGHJKMNPQRSTUVWXYZ`から暗号学的乱数で12文字を生成し、
+  `XXXX-XXXX-XXXX`形式で表示する。文字選択はmodulo biasのないrejection samplingを使う。
+- 有効期限は発行時に使ったDB現在時刻から10分後とする。
+- consumeは表示形式またはhyphenなし12文字をcase-insensitiveで受け付け、hyphen除去とASCII大文字化だけを
+  行う。前後空白のtrim、似た文字への置換、Unicode正規化は行わない。
+- DBには正規化済み12文字のSHA-256を32 byteで保存し、raw codeは保存・log出力しない。
+- raw codeを返すのは発行成功responseの1回だけで、状態GETやconsume responseでは返さない。
+
+同じユーザーが明示的に再発行すると、同一transactionで以前の未消費codeを`expired`にしてから
+新しいcodeを発行します。有効なcodeを複数併存させません。発行responseを受け取れなかった場合は
+同じPOSTを再実行でき、そのたびに以前のcodeを無効化するため、最後に受け取ったcodeだけを使用します。
+発行は対象User行を`FOR UPDATE`し、連携済みでないことを再確認してから旧code無効化と新code作成を
+行います。Server消費も同じUser行を先にlockするため、連携成立と再発行が競合しても、
+連携済みUserの新しい有効codeは残りません。
+
+### 連携code発行
+
+```http
+POST /api/v1/minecraft-links/codes
+Cookie: session Cookie
+X-XSRF-TOKEN: CookieをURLデコードした値
+```
+
+request bodyはありません。成功時は`201 Created`です。
+
+```json
+{
+  "data": {
+    "codeId": "9dc797a3-c48d-4a87-bf5a-b0be676dc723",
+    "code": "7KMQ-3RWP-A9TX",
+    "status": "pending",
+    "expiresAt": "2026-11-24T02:10:00.000000Z"
+  }
+}
+```
+
+```ts
+type MinecraftLinkCodeIssued = {
+  codeId: string;
+  code: string;
+  status: 'pending';
+  expiresAt: string;
+};
+```
+
+未ログインは401、CSRF不一致は419です。すでにMinecraft UUIDと連携済みなら409を返し、
+既存linkを変更しません。
+
+```json
+{
+  "message": "Minecraftアカウントはすでに連携されています。",
+  "code": "MINECRAFT_ACCOUNT_ALREADY_LINKED"
+}
+```
+
+### Web連携状態照会
+
+```http
+GET /api/v1/minecraft-links/codes/{codeId}
+Cookie: session Cookie
+```
+
+成功時は`200 OK`です。GETはDBを更新せず、約3秒間隔で繰り返してもcode行の時刻や件数を変更しません。
+
+```json
+{
+  "data": {
+    "codeId": "9dc797a3-c48d-4a87-bf5a-b0be676dc723",
+    "status": "linked",
+    "expiresAt": "2026-11-24T02:10:00.000000Z"
+  }
+}
+```
+
+```ts
+type MinecraftLinkCodeStatus = {
+  codeId: string;
+  status: 'pending' | 'linked' | 'expired';
+  expiresAt: string;
+};
+```
+
+`consumedAt`、raw code、code hash、Minecraft UUID、user IDは返しません。`consumed_at`があれば
+期限後も`linked`、未消費で現在時刻が`expires_at`以上なら`expired`です。他人の`codeId`と
+存在しない`codeId`は同じ404にして、所有者や存在を推測できないようにします。lowercase hyphen形式の
+UUID v4でない`codeId`も同じ404とし、field errorで存在確認用の別分岐を増やしません。
+
+```json
+{
+  "message": "Minecraft連携コードが見つかりません。",
+  "code": "MINECRAFT_LINK_CODE_NOT_FOUND"
+}
+```
+
+### Fabric Serverによるcode消費
+
+```http
+POST /api/v1/minecraft/links/consume
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+Content-Type: application/json
+```
+
+```json
+{
+  "code": "7KMQ-3RWP-A9TX",
+  "minecraftUuid": "7e780d76-3a6c-4c68-a88f-9c379ba38fef"
+}
+```
+
+bodyは`code`と`minecraftUuid`の2 fieldだけを必須とします。欠落、文字列以外、未知fieldは422です。
+
+成功時は`201 Created`で、利用者情報やUUIDを返しません。
+
+```json
+{
+  "data": {
+    "status": "linked"
+  }
+}
+```
+
+code hashで対象Userを取得した後、User行、code行の順に`FOR UPDATE`して両方を再検証します。
+有効・未消費であることを確認してから、`minecraft_links`の作成と`consumed_at`更新を
+一つのDB transactionで確定します。同じcodeを2 requestが同時にconsumeした場合は1件だけ201で、
+もう1件は`MINECRAFT_LINK_CODE_USED`です。response損失後の再送でもlinkを増やさず、Webの状態GETは
+`linked`を返します。
+
+| Status | code                               | 条件                             | DB変更 |
+| -----: | ---------------------------------- | -------------------------------- | ------ |
+|    404 | `MINECRAFT_LINK_CODE_NOT_FOUND`    | 形式は正しいが一致するcodeがない | なし   |
+|    410 | `MINECRAFT_LINK_CODE_EXPIRED`      | 未消費のまま有効期限へ到達       | なし   |
+|    409 | `MINECRAFT_LINK_CODE_USED`         | 正常consume済み                  | なし   |
+|    409 | `MINECRAFT_ACCOUNT_ALREADY_LINKED` | codeのユーザーがすでにUUIDと連携 | なし   |
+|    409 | `MINECRAFT_UUID_ALREADY_LINKED`    | 接続UUIDが別ユーザーと連携       | なし   |
+
+codeまたは`minecraftUuid`の形式不正は422の`errors.code` / `errors.minecraftUuid`です。
+競合やSQL失敗ではcodeを消費せず、既存linkも変更しません。error responseやlogへ受信code、hash、UUID、
+token値・長さを含めません。
+
+Fabric認証の後、(1) body形式、(2) codeの存在、(3) 使用済み、(4) 期限切れ、
+(5) User連携済み、(6) UUID連携済みの順で判定します。この優先順は再送や競合でも変えず、
+複数条件に当てはまるrequestが環境ごとに別のerrorにならないようにします。
+
+### 実装Issueの必須確認
+
+- 発行: 未ログイン401、CSRF不一致419、正常201、再発行で有効codeが1件、連携済み409。
+- 状態GET: 本人の`pending/linked/expired`、他人と不存在の同一404、10回取得してDB更新なし。
+- consume: 正常201、形式不正422、不存在404、期限切れ410、使用済み409、User・UUID競合409。
+- 競合: 同じcodeの同時consumeで成功1件、再発行とconsumeの同時実行で連携済みUserの有効codeが残らない。
+- rollback: SQL失敗でlinkと`consumed_at`を両方rollbackし、再発行失敗で旧codeの期限も変更しない。
+- 秘密境界: Web・Client JAR・response・logにFabric token、code hash、UUID全値を出さない。
 
 ## Fabric商品一覧
 

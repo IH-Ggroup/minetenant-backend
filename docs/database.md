@@ -8,7 +8,8 @@
 - APIのURL、JSON、HTTP status、error code: [`api.md`](./api.md)
 - username認証の本番切り替え手順: [`auth-cutover.md`](./auth-cutover.md)
 
-対象は`users`、`stores`、`products`、`purchase_transactions`です。Minecraftの連携情報や建築jobは別の契約Issueで扱います。
+対象は`users`、`stores`、`products`、`purchase_transactions`、`minecraft_links`、
+`minecraft_link_codes`です。建築jobは別の契約Issueで扱います。
 
 用語: `migration`はDBの構造や既存データを新しい形へ移す処理、`index`は検索を速くする仕組み、`外部キー`は別tableに存在するIDだけを保存できる制約です。
 
@@ -17,6 +18,8 @@
 - [IDと公開APIの関係](#id物理名と公開apiの境界)
 - [現在のDBから最終DBへの移行](#現行から目標への変更)
 - [User](#users)
+- [Minecraftアカウント連携](#minecraft_links)
+- [Minecraft連携code](#minecraft_link_codes)
 - [Store](#stores)
 - [Product](#products)
 - [取引](#purchase_transactions)
@@ -33,6 +36,8 @@ DBのID列は最終ER図に合わせ、entityを含む主キー名と役割が�
 | `products`              | `product_id`     | `user_id`                          |
 | `purchase_transactions` | `transaction_id` | `buyer_user_id` / `seller_user_id` |
 | `hono_sessions`         | `session_id`     | `user_id`                          |
+| `minecraft_links`       | `user_id`        | `user_id`                          |
+| `minecraft_link_codes`  | `code_id`        | `user_id`                          |
 
 公開HTTP APIのJSON名は既存契約を維持します。DB row typeは物理名をそのまま使用し、serializerで
 `user_id` / `store_id` / `product_id` / `transaction_id`を`id`へ、Storeの`user_id`を`ownerId`へ、
@@ -54,7 +59,8 @@ FrontendとMinecraftへDBの物理列名は公開しません。
 - `hono_sessions_user_id_foreign`（`ON DELETE CASCADE`）
 
 上記のうち`hono_sessions.user_id`はNULLを許可し、それ以外のID外部キーはNULLを許可しません。
-Session以外のID外部キーは`ON DELETE RESTRICT`です。
+`hono_sessions`とMinecraft連携の2 tableはUser削除時に`ON DELETE CASCADE`、それ以外は
+`ON DELETE RESTRICT`です。
 
 `0001_entity_id_columns`は、改名対象IDへ接続する定義外の外部キー、維持対象indexの欠損、
 view・trigger・routine・event、改名対象table上の式やpartitionなどをDDL前に検出して停止します。
@@ -75,26 +81,29 @@ view・trigger・routine・event、改名対象table上の式やpartitionなど�
 | 店舗level          | 境界と表示計算が実装に直書き  | Lv1〜5の境界、最大時、表示計算、丸めを共通契約として固定       |
 | Webアカウント      | email / `name` / `password`   | `username` / `display_name` / `password_hash`。emailは削除     |
 | User表示用field    | DB列へ保存                    | `roleLabel`と`avatarInitial`はserializerで導出                 |
+| Minecraft連携      | なし                          | UserとUUIDの1対1link、短期・1回限りのcodeを保存                |
 
 ID列は上記の最終物理名を前提とし、業務機能のmigrationで別名へ戻しません。
 
 ## 決定理由
 
-| 決定                                             | 理由                                                                        |
-| ------------------------------------------------ | --------------------------------------------------------------------------- |
-| 数量ではなく`available / sold`                   | 一点物に`stock>=2`や再入荷という不可能な状態を残さないため                  |
-| 出品keyを`(user_id, listing_request_id)`で一意化 | 別ユーザーの操作を衝突させず、同じユーザーの重複出品だけを防ぐため          |
-| 購入`request_id`をglobalに一意化                 | Web / Minecraftをまたぐ再送と誤ったID再利用を同じ規則で検出するため         |
-| `purchase_transactions.product_id`を一意化       | applicationのlockに加え、DBでも一商品一取引を保証するため                   |
-| 商品をsoft delete                                | 物理削除後の再送で同じ出品requestから別Productが生まれるのを防ぐため        |
-| `OUT_OF_STOCK`を維持                             | 既存クライアントの409分岐を壊さず、「すでにsold」の意味へ読み替えられるため |
-| 出品pointsをJSTで1日3件までに制限                | 削除・再出品や自動出品によるpointsの無制限な取得を抑えるため                |
-| buyerと販売店舗を同じtransactionで更新           | 購入成立と店舗成長の一部だけがcommitされる状態を作らないため                |
-| 最大Lv後もpointsを保持                           | 累計実績を失わず、将来level追加時にも既存pointsを利用できるため             |
-| 進捗率を小数点以下切り捨て                       | 次の境界へ未到達なのに100%と表示する状態を作らないため                      |
-| usernameをASCII・binary比較                      | 大文字小文字や照合順序に依存せず、登録・ログインIDを一意にするため          |
-| 表示名と認証IDを分離                             | 日本語を含む自由な表示名の変更が、ログインIDや外部キーを変えないため        |
-| User表示値をserializerで導出                     | 権限labelとavatarの保存値がrole・displayNameからずれるのを防ぐため          |
+| 決定                                             | 理由                                                                         |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| 数量ではなく`available / sold`                   | 一点物に`stock>=2`や再入荷という不可能な状態を残さないため                   |
+| 出品keyを`(user_id, listing_request_id)`で一意化 | 別ユーザーの操作を衝突させず、同じユーザーの重複出品だけを防ぐため           |
+| 購入`request_id`をglobalに一意化                 | Web / Minecraftをまたぐ再送と誤ったID再利用を同じ規則で検出するため          |
+| `purchase_transactions.product_id`を一意化       | applicationのlockに加え、DBでも一商品一取引を保証するため                    |
+| 商品をsoft delete                                | 物理削除後の再送で同じ出品requestから別Productが生まれるのを防ぐため         |
+| `OUT_OF_STOCK`を維持                             | 既存クライアントの409分岐を壊さず、「すでにsold」の意味へ読み替えられるため  |
+| 出品pointsをJSTで1日3件までに制限                | 削除・再出品や自動出品によるpointsの無制限な取得を抑えるため                 |
+| buyerと販売店舗を同じtransactionで更新           | 購入成立と店舗成長の一部だけがcommitされる状態を作らないため                 |
+| 最大Lv後もpointsを保持                           | 累計実績を失わず、将来level追加時にも既存pointsを利用できるため              |
+| 進捗率を小数点以下切り捨て                       | 次の境界へ未到達なのに100%と表示する状態を作らないため                       |
+| usernameをASCII・binary比較                      | 大文字小文字や照合順序に依存せず、登録・ログインIDを一意にするため           |
+| 表示名と認証IDを分離                             | 日本語を含む自由な表示名の変更が、ログインIDや外部キーを変えないため         |
+| User表示値をserializerで導出                     | 権限labelとavatarの保存値がrole・displayNameからずれるのを防ぐため           |
+| UserとMinecraft UUIDを1対1にする                 | 同じWebアカウントやMinecraftアカウントが複数の相手へ紐付かないようにするため |
+| raw連携codeを保存しない                          | DBやbackupの閲覧だけで有効codeを利用できないようにするため                   |
 
 ## API error codeとの対応
 
@@ -192,6 +201,8 @@ usernameとdisplay_nameは変更可能な属性であり、外部キーに使い
 | `products`              | `user_id`                          | 不可 | `RESTRICT` |
 | `purchase_transactions` | `buyer_user_id` / `seller_user_id` | 不可 | `RESTRICT` |
 | `hono_sessions`         | `user_id`                          | 可   | `CASCADE`  |
+| `minecraft_links`       | `user_id`                          | 不可 | `CASCADE`  |
+| `minecraft_link_codes`  | `user_id`                          | 不可 | `CASCADE`  |
 
 Minecraft UUIDとのlink tableと一時link codeもusernameではなく`users.user_id`を参照します。
 usernameやdisplay_nameを変更してもMinecraft identityとの対応は変わりません。
@@ -295,6 +306,72 @@ attempt 0〜99を再計算し、新旧列も整合する正規generated値だけ
 NULLのままにします。
 password rehashの正本切替、binary CAS、rollback時の認証可用性も同runbookを正本とします。
 #109のpreflightは最後の防御であり、このcutover前確認を先送りする理由にはしません。
+
+## `minecraft_links`
+
+この節はB-CONTRACT-04のDB正本です。WebアカウントとMinecraft UUIDの確定済み対応だけを保持し、
+username、display_name、password、連携コードを複製しません。連携解除・自動上書きは今回作りません。
+
+| 列               | 型                                               | NULL | default                | 説明                                   |
+| ---------------- | ------------------------------------------------ | ---- | ---------------------- | -------------------------------------- |
+| `user_id`        | `VARCHAR(255)`                                   | 不可 | なし                   | PK、`users.user_id`へのFK              |
+| `minecraft_uuid` | `CHAR(36) CHARACTER SET ascii COLLATE ascii_bin` | 不可 | なし                   | canonical lowercase hyphen形式、UNIQUE |
+| `created_at`     | `TIMESTAMP(6)`                                   | 不可 | `CURRENT_TIMESTAMP(6)` | 連携成立日時                           |
+
+制約は次のとおりです。
+
+- `PRIMARY KEY (user_id)`で1ユーザー1UUIDを保証する。
+- `minecraft_links_minecraft_uuid_unique UNIQUE (minecraft_uuid)`で1UUID1ユーザーを保証する。
+- `minecraft_links_user_id_foreign`は`users.user_id`を参照し、`ON DELETE CASCADE`とする。
+- `minecraft_links_uuid_format_check`は`minecraft_uuid`に
+  `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`の小文字hexだけを許可する。
+  UUID versionは固定せず、Fabric Serverの接続情報から得たJava `UUID#toString()`形式を保存する。
+
+UUIDはFabric Dedicated Serverが接続中playerから取得し、Client JARやWeb入力を正本にしません。
+API responseへUUID全値を返さず、内部のMinecraft APIが購入者・店舗を解決するときだけ使います。
+
+## `minecraft_link_codes`
+
+一回限りの連携コードを保持します。raw codeは発行responseで一度だけ返し、DBには保存しません。
+
+| 列            | 型                                               | NULL | default                | 説明                                       |
+| ------------- | ------------------------------------------------ | ---- | ---------------------- | ------------------------------------------ |
+| `code_id`     | `CHAR(36) CHARACTER SET ascii COLLATE ascii_bin` | 不可 | なし                   | PK、Web状態照会用UUID v4                   |
+| `user_id`     | `VARCHAR(255)`                                   | 不可 | なし                   | `users.user_id`へのFK                      |
+| `code_hash`   | `BINARY(32)`                                     | 不可 | なし                   | 正規化済みcodeのSHA-256、UNIQUE            |
+| `expires_at`  | `TIMESTAMP(6)`                                   | 不可 | なし                   | 有効期限。再発行時は旧codeを現在時刻へ短縮 |
+| `consumed_at` | `TIMESTAMP(6)`                                   | 可   | `NULL`                 | 正常consumeが確定した時刻                  |
+| `created_at`  | `TIMESTAMP(6)`                                   | 不可 | `CURRENT_TIMESTAMP(6)` | 発行日時                                   |
+
+制約とindexは次のとおりです。
+
+- `minecraft_link_codes_code_hash_unique UNIQUE (code_hash)`を持つ。
+- `minecraft_link_codes_user_id_expires_at_index (user_id, expires_at)`を持つ。
+- `minecraft_link_codes_user_id_foreign`は`users.user_id`を参照し、`ON DELETE CASCADE`とする。
+- `minecraft_link_codes_code_id_format_check`は`code_id`にlowercase hyphen形式のUUID v4だけを許可する。
+- `minecraft_link_codes_timestamps_check`は`expires_at >= created_at`かつ、`consumed_at IS NULL`または
+  `created_at <= consumed_at AND consumed_at < expires_at`だけを許可する。
+
+`status`列は保存せず、同じDB時刻から次の順で導出します。
+
+1. `consumed_at IS NOT NULL`なら`linked`。
+2. 未消費かつ現在時刻が`expires_at`以上なら`expired`。
+3. それ以外は`pending`。
+
+発行時は`users`の対象行を`FOR UPDATE`し、連携済みでないことを再確認します。その後、
+そのユーザーの未消費・未期限切れcodeの`expires_at`を同じDB現在時刻へ短縮してから新しい行を作ります。
+これにより同一ユーザーの有効codeは最大1件です。
+新規codeの保存まで失敗した場合は旧codeの期限短縮もrollbackします。codeは発行から10分間だけ有効です。
+
+表示codeは`23456789ABCDEFGHJKMNPQRSTUVWXYZ`から暗号学的乱数とrejection samplingで12文字を作り、
+`XXXX-XXXX-XXXX`形式で返します。hash対象はhyphenを除いてASCII大文字化した12文字です。
+consumeは表示形式またはhyphenなし形式だけを受け付け、空白除去など別の補正は行いません。
+
+code消費は、最初の`code_hash`検索で得た`user_id`のUser行、同じcode行の順に`FOR UPDATE`し、
+両方の関係と期限・未消費を再検証します。その後、`minecraft_links`のinsertと`consumed_at`更新を
+同じtransactionでcommitします。発行も同じUser行を先にlockするため、再発行と消費は同じ順番で直列化されます。
+同じcodeの同時consumeは成功1件だけで、
+敗者は使用済みerrorになります。UUID競合・User競合・SQL失敗ではlinkも`consumed_at`も変更しません。
 
 ## `stores`
 
