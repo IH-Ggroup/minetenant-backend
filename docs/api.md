@@ -19,6 +19,8 @@ camelCaseで返します。
 > Fabric専用APIの認証はB-CONTRACT-03で確定し、B-MC-AUTH-01 #62で実装する契約です。
 > ローカルでHonoへ直接接続するMinecraft routeにはFabric Dedicated Server認証が必要です。
 > 現在の公開モードとFront WorkerではMinecraft routeを公開しません。
+> Minecraftの商品閲覧・購入・結果照会はB-CONTRACT-05で確定した最終契約です。実装Issueでは
+> 本文のpath、認証境界、DTO、status、error codeを変更せずに接続します。
 
 ## 現行から確定契約への変更
 
@@ -46,7 +48,7 @@ DBの列・制約・移行規則は[`database.md`](./database.md)を参照して
 - [店舗・取引](#店舗)
 - [Webフロント接続例](#webフロントの接続例)
 - [Minecraftアカウント連携](#webアカウントとminecraft-uuidの連携)
-- [Fabric API](#fabric商品一覧)
+- [Minecraft商品閲覧・購入](#minecraft商品閲覧購入)
 
 ## 共通仕様
 
@@ -1502,14 +1504,15 @@ Fabric認証middlewareはroute groupの先頭で、body parse、利用者や商�
 
 ### 保護するpath
 
-methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。現在および
-B-CONTRACT-04で確定した対象は次のとおりです。
+methodに関係なく`/api/v1/minecraft/`で始まるすべてのpathを保護します。確定契約で使うpathは
+次のとおりです。
 
-| Method | path                              | 用途              |
-| ------ | --------------------------------- | ----------------- |
-| GET    | `/api/v1/minecraft/catalog`       | Fabric商品一覧    |
-| POST   | `/api/v1/minecraft/purchases`     | Fabricからの購入  |
-| POST   | `/api/v1/minecraft/links/consume` | Webアカウント連携 |
+| Method | path                                               | 用途              |
+| ------ | -------------------------------------------------- | ----------------- |
+| POST   | `/api/v1/minecraft/links/consume`                  | Webアカウント連携 |
+| GET    | `/api/v1/minecraft/stores/{storeId}/products`      | 店舗別商品一覧    |
+| POST   | `/api/v1/minecraft/purchases`                      | Minecraft購入     |
+| GET    | `/api/v1/minecraft/purchases/requests/{requestId}` | 購入結果照会      |
 
 アカウント連携や建築jobなどの後続Issueで追加するMinecraft routeも同じprefixの下へ置き、個別の
 認証付け忘れが起きないようroute group単位で保護します。`/up`、`/api/hello`、
@@ -1767,35 +1770,231 @@ Fabric認証の後、(1) body形式、(2) codeの存在、(3) 使用済み、(4)
 - rollback: SQL失敗でlinkと`consumed_at`を両方rollbackし、再発行失敗で旧codeの期限も変更しない。
 - 秘密境界: Web・Client JAR・response・logにFabric token、code hash、UUID全値を出さない。
 
-## Fabric商品一覧
+## Minecraft商品閲覧・購入
 
-以下のpathには上記のFabric認証を適用し、Webのセッション認証・CSRF検証は適用しません。
-responseの各商品は共有の一点物Productなので、
-`stock`ではなく`status`を返し、`status: "sold"`の商品は購入できません。Web画面からはこちらを
-使わないでください。
+この節はB-CONTRACT-05のAPI正本です。Minecraft ClientはHonoへ直接接続せず、Clientから受け取るのは
+`storeId`、`productId`、購入操作ごとの`requestId`だけです。Fabric Dedicated Serverが接続中playerの
+UUIDを取得し、Honoへ送ります。価格、seller、buyer、商品状態、購入元はClientの申告を使いません。
 
-```http
-GET /api/v1/minecraft/catalog
+```mermaid
+sequenceDiagram
+  participant Client as Minecraft Client
+  participant Server as Fabric Server
+  participant API as Hono API
+  participant DB as MySQL
+  Client->>Server: storeId
+  Server->>API: GET 店舗別商品一覧 + Bearer
+  API-->>Server: MinecraftProductSummary[]
+  Server-->>Client: 最小商品一覧packet
+  Client->>Server: productId
+  Server->>API: GET 公開商品詳細
+  API-->>Server: Product
+  Server-->>Client: 最小商品詳細packet
+  Client->>Server: productId + requestId
+  Server->>API: POST 購入 + Bearer + 接続UUID
+  API->>DB: link解決・商品lock・購入commit
+  API-->>Server: MinecraftPurchase
+  Server-->>Client: 購入結果
 ```
 
-Webと同じ商品を、`sold`も含めてFabric側へ返します。
+### リポジトリ間の境界
 
-## Fabric購入
+- FrontとWebブラウザは`/api/v1/minecraft/**`を呼ばない。Front Workerもこのprefixを公開しない。
+- 商品詳細だけはFrontと共通の公開`GET /api/v1/products/{productId}`を使う。
+- Fabric tokenとHono接続先はDedicated Serverだけが保持し、Client packetやClient JARへ含めない。
+- ServerからClientへ返す商品は一覧5 field、詳細9 fieldに限定する。
+- UUIDはJava `UUID#toString()`のlowercase hyphen形式で、Serverが接続情報から取得する。
+
+購入と結果照会では、Serverが取得したUUIDを次のheaderへ設定します。Clientから同名headerやUUID文字列を
+受け取らず、Server内で上書きします。
+
+```http
+X-MineTenant-Player-UUID: 7e780d76-3a6c-4c68-a88f-9c379ba38fef
+```
+
+`storeId`と`productId`は英数字・hyphen・underscoreの1〜64文字、購入`requestId`は共通仕様どおり
+`[A-Za-z0-9._:-]{1,100}`です。新しい`requestId`にはUUID v4を推奨し、結果が確定するまで同じ値を
+保持します。IDを別商品や別playerの操作へ使い回しません。
+
+### 店舗別商品一覧
+
+```http
+GET /api/v1/minecraft/stores/{storeId}/products
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+```
+
+指定店舗が存在する場合は、soft deleteされていない`available`と`sold`を返します。別店舗の商品を
+混ぜません。購入可能な商品を先、同じstatus内は`created_at DESC, product_id ASC`で並べ、最大256件です。
+商品が0件の店舗は`200 { "data": [] }`、存在しない店舗は404です。
+
+```json
+{
+  "data": [
+    {
+      "id": "product-toolbag",
+      "storeId": "store-mine",
+      "name": "冒険者のツールバッグ",
+      "price": 3200,
+      "status": "available"
+    }
+  ]
+}
+```
+
+```ts
+type MinecraftProductSummary = {
+  id: string;
+  storeId: string;
+  name: string;
+  price: number;
+  status: 'available' | 'sold';
+};
+```
+
+現行の`GET /api/v1/minecraft/catalog`は全店舗を返す開発互換pathです。新しいconsumerは使用せず、
+Backend #66とMod #40が店舗別pathへ接続した後に削除します。Webの`GET /products`へ置き換えるのではなく、
+Server認証付きの店舗別pathへ移行します。
+
+### 商品詳細
+
+```http
+GET /api/v1/products/{productId}
+```
+
+この1本だけはWebと共通の公開GETで、Cookie、CSRF、Fabric tokenは不要です。Front Workerもこのpathを
+転送します。Honoは共通の`Product` DTOを返し、Fabric ServerがClientへ送る前に次の9 fieldだけへ
+変換します。Hono responseに含まれる`sellerId`と`createdAt`はClient packetへ含めません。
+
+```ts
+type MinecraftProductDetail = {
+  id: string;
+  storeId: string;
+  name: string;
+  description: string;
+  price: number;
+  status: 'available' | 'sold';
+  category: ProductCategory;
+  theme: ProductTheme;
+  emoji: string;
+};
+```
+
+`available`と`sold`はどちらも200で最新状態を返し、存在しない商品とsoft delete済み商品は同じ404です。
+GETは商品、取引、店舗pointsを更新しません。購入確認画面を開けるのは`available`だけで、確認画面を
+開いた後も購入POST時のDB状態を最終判定にします。
+
+### Minecraft購入
 
 ```http
 POST /api/v1/minecraft/purchases
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+X-MineTenant-Player-UUID: 7e780d76-3a6c-4c68-a88f-9c379ba38fef
 Content-Type: application/json
 ```
 
 ```json
 {
   "productId": "product-toolbag",
-  "buyerId": "user-seller",
   "requestId": "74e4951d-b909-4a9f-9db2-b1555b750b4f"
 }
 ```
 
-購入元はAPI側で`minecraft`に固定します。Web購入と同じ購入処理を通るため、同じ商品状態と
-取引履歴を更新し、初回の購入成立時だけbuyerが所有する店舗へ50 points、Productの販売店舗へ
-100 pointsを加算します。同じ`requestId`の再送では再加算せず、途中で失敗した場合はすべて
-rollbackします。
+bodyは`productId`と`requestId`の2 fieldだけです。`buyerId`、`source`、`sellerId`、`price`、
+`status`、`minecraftUuid`を含む未知fieldは422で拒否します。HonoはheaderのUUIDを
+`minecraft_links.minecraft_uuid`で検索し、対応する内部`user_id`をbuyerにします。購入元は
+`minecraft`へ固定し、商品行からseller・販売店舗・金額・最新状態を取得します。
+
+初回成功は201、同じUUID・商品・`requestId`の再送は200で、どちらも同じ
+`MinecraftPurchase`を返します。
+
+```json
+{
+  "data": {
+    "id": "transaction-example",
+    "requestId": "74e4951d-b909-4a9f-9db2-b1555b750b4f",
+    "productId": "product-toolbag",
+    "amount": 3200,
+    "status": "paid",
+    "createdAt": "2026-11-25T07:00:00.000000Z"
+  }
+}
+```
+
+```ts
+type MinecraftPurchase = {
+  id: string;
+  requestId: string;
+  productId: string;
+  amount: number;
+  status: 'paid' | 'shipping' | 'complete';
+  createdAt: string;
+};
+```
+
+Productの`sold`化、Transaction作成、buyer店舗への50 points、販売店舗への100 pointsはWeb購入と同じ
+DB transactionで確定します。同じ`requestId`の再送では商品状態・Transaction・pointsを更新しません。
+WebとMinecraftが別の`requestId`で同じ商品を同時購入した場合も成功は1件だけです。
+
+### Minecraft購入結果照会
+
+購入POSTのresponseがtimeoutや切断で不明になった場合は、新しい購入を作らず、同じUUIDと
+`requestId`で結果を照会します。
+
+```http
+GET /api/v1/minecraft/purchases/requests/{requestId}
+Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
+X-MineTenant-Player-UUID: 7e780d76-3a6c-4c68-a88f-9c379ba38fef
+```
+
+UUIDから解決したbuyer、pathの`requestId`、`source='minecraft'`が同じTransactionだけを200で返します。
+responseは購入POSTと同じ`MinecraftPurchase`です。他人の`requestId`と存在しない`requestId`は同じ404にし、
+取引の存在やbuyerを推測できないようにします。GETはProduct、Transaction、店舗pointsを更新しません。
+
+POSTがまだ処理中の場合も、commit前のTransactionは見えないため404になり得ます。結果不明時は有限回の
+backoff付きGETを行い、それでも不明なら同じbody・同じ`requestId`でPOSTを再送します。新しい
+`requestId`へ切り替えません。
+
+### errorと判定順
+
+| Status | code                                  | 条件                                             |
+| -----: | ------------------------------------- | ------------------------------------------------ |
+|    401 | `FABRIC_AUTHENTICATION_FAILED`        | Fabric資格情報なし・不一致                       |
+|    404 | `MINECRAFT_STORE_NOT_FOUND`           | 店舗別一覧の店舗が存在しない                     |
+|    409 | `MINECRAFT_ACCOUNT_NOT_LINKED`        | 接続UUIDがWebアカウントへ未連携                  |
+|    404 | `PRODUCT_NOT_FOUND`                   | 購入対象の商品が存在しない・soft delete済み      |
+|    422 | `SELF_PURCHASE`                       | buyer本人が出品した商品                          |
+|    409 | `OUT_OF_STOCK`                        | 商品が`sold`                                     |
+|    409 | `REQUEST_ID_CONFLICT`                 | 同じ`requestId`を別商品・別buyer・別sourceへ使用 |
+|    409 | `USER_STORE_NOT_READY`                | buyerまたはsellerの店舗が存在しないDB不整合      |
+|    404 | `MINECRAFT_PURCHASE_RESULT_NOT_FOUND` | 本人の確定済みMinecraft購入結果が存在しない      |
+
+Minecraft固有errorのresponseは次の固定形です。Modは`message`ではなく`code`で分岐します。
+
+```json
+{
+  "message": "Minecraftアカウントが連携されていません。",
+  "code": "MINECRAFT_ACCOUNT_NOT_LINKED"
+}
+```
+
+```json
+{
+  "message": "購入結果が見つかりません。",
+  "code": "MINECRAFT_PURCHASE_RESULT_NOT_FOUND"
+}
+```
+
+認証middlewareの後、購入は(1) header・body形式、(2) UUID連携、(3) 既存`requestId`の再送・競合、
+(4) 商品存在、(5) 自己購入、(6) 商品状態、(7) buyer・seller店舗の順で判定します。validation errorは
+422の`errors.minecraftUuid` / `errors.productId` / `errors.requestId`です。error responseやlogへ
+Fabric token、UUID全値、内部user ID、buyer・seller情報を出しません。
+
+### 実装Issueの必須確認
+
+- 一覧: 店舗Aへ店舗Bの商品が混ざらず、available / sold、0件、存在しない店舗を確認する。
+- 詳細: available / sold、存在しない・soft delete済み、繰返しGETでDB更新なしを確認する。
+- 購入: 初回201、同内容再送200、未連携、自己購入、sold、ID競合、未知field拒否を確認する。
+- 結果照会: 本人200、別UUIDと不存在の同一404、繰返しGETで商品・points・件数不変を確認する。
+- 競合: Web / Minecraft同時購入と同一`requestId`同時再送でTransactionとpoints加算が1回だけになる。
+- response損失: commit後のresponseを失っても、同じ`requestId`のGETまたはPOSTで同じTransactionへ戻る。
+- 境界: Front WorkerからMinecraft routeへ到達せず、Client packet / JARへtoken・UUID・内部IDを含めない。
