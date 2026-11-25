@@ -599,6 +599,7 @@ describe('fail-closed database entry points', () => {
       DB_USERNAME: 'minetenant',
       DB_PASSWORD: 'never-print-startup-password',
       MINETENANT_ORIGIN_TOKEN: 'never-print-startup-origin-token',
+      MINETENANT_FABRIC_SERVER_TOKEN: 'f'.repeat(64),
     });
     const serve = vi.fn();
     const consoleError = vi

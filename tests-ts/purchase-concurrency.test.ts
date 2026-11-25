@@ -3,6 +3,7 @@ import {
   createClient,
   createTestApp,
   expectStatus,
+  TEST_FABRIC_SERVER_TOKEN,
   type TestApp,
 } from './helpers.js';
 
@@ -23,6 +24,7 @@ describe('atomic MySQL purchases and deletion races', () => {
     return test.app.request('/api/v1/minecraft/purchases', {
       method: 'POST',
       headers: {
+        Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },

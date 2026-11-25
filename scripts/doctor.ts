@@ -6,6 +6,7 @@ import { config as loadEnv } from 'dotenv';
 import { readConfig } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
 import { formatErrorForLog, supportsNodeVersion } from '../src/diagnostics.js';
+import { assertFabricServerTokenConfigured } from '../src/fabric-auth.js';
 import {
   inspectMigrationStatus,
   migrations,
@@ -49,6 +50,7 @@ export async function runDoctor(): Promise<number> {
   let config;
   try {
     config = readConfig();
+    assertFabricServerTokenConfigured(config);
   } catch (error) {
     const detail =
       error instanceof Error ? error.message : '設定を確認してください。';

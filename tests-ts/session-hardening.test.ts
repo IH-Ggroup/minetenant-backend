@@ -14,6 +14,7 @@ import {
   createClient,
   createTestApp,
   expectStatus,
+  TEST_FABRIC_SERVER_TOKEN,
   type TestApp,
 } from './helpers.js';
 
@@ -77,12 +78,23 @@ describe('lazy anonymous sessions', () => {
         },
         204,
       ],
-      ['/api/v1/minecraft/catalog', {}, 200],
+      [
+        '/api/v1/minecraft/catalog',
+        {
+          headers: {
+            Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
+          },
+        },
+        200,
+      ],
       [
         '/api/v1/minecraft/purchases',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
           body: '{}',
         },
         422,
