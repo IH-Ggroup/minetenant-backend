@@ -1,15 +1,26 @@
-# MineTenant Webアカウント・一点物商品・購入・店舗成長 DB契約
+# MineTenantのDB契約
 
-この文書は [B-CONTRACT-01](https://github.com/IH-Ggroup/minetenant-backend/issues/41) と
-[B-CONTRACT-02](https://github.com/IH-Ggroup/minetenant-backend/issues/42) で確定した、`products`、
-`purchase_transactions`、`stores`の目標契約と、
-[B-CONTRACT-07](https://github.com/IH-Ggroup/minetenant-backend/issues/96) で確定した`users`の
-目標契約です。現行`develop`の実装説明ではなく、B-PRODUCT、B-BUY、B-XP、B-AUTH Issueが
-実装するときの正本です。migration、route、service本体は契約Issueでは変更しません。
+この文書は、MySQLに保存するデータの最終形を定義します。現在のDB状態ではなく、今後の実装が従う設計図です。
 
-APIのcamelCase、HTTP status、error codeは[`docs/api.md`](./api.md)を正本とし、この文書では
-MySQLのsnake_case、制約、移行規則を固定します。ここにないMinecraft認証・連携、建築ジョブの
-列やtableは、それぞれの契約Issueで決めます。
+## どの文書を見るか
+
+- DBの列名、型、index、外部キー、データ移行: この文書
+- APIのURL、JSON、HTTP status、error code: [`api.md`](./api.md)
+- username認証の本番切り替え手順: [`auth-cutover.md`](./auth-cutover.md)
+
+対象は`users`、`stores`、`products`、`purchase_transactions`です。Minecraftの連携情報や建築jobは別の契約Issueで扱います。
+
+用語: `migration`はDBの構造や既存データを新しい形へ移す処理、`index`は検索を速くする仕組み、`外部キー`は別tableに存在するIDだけを保存できる制約です。
+
+## 目次
+
+- [IDと公開APIの関係](#id物理名と公開apiの境界)
+- [現在のDBから最終DBへの移行](#現行から目標への変更)
+- [User](#users)
+- [Store](#stores)
+- [Product](#products)
+- [取引](#purchase_transactions)
+- [stockからstatusへの移行手順](#stockからstatusへの移行)
 
 ## ID物理名と公開APIの境界
 
@@ -698,32 +709,10 @@ cutoverは次の停止手順を変えません。
 Transactionを増減させません。途中失敗はtransactional DMLをrollbackし、適用済みDDLは履歴を確認した
 fix-forwardで再開します。
 
-## Issue間の受け渡し
+## 機能ごとの補足
 
-- B-AUTH-01〜12（#98〜#109）、B-AUTH-CUTOVER（#118）、B-AUTH-SESSION（#119）、
-  B-DB-STRICT-MODE（#120）、B-AUTH-CONTRACT-CUTOVER（#121）: `users`節のexpand / cutover / contract順、決定的backfillと
-  versioned catch-up、`users.user_id`参照、完成時制約を正本とする。Frontend
-  F-AUTH-01（#94）の結合確認とusername確認導線が完了するまでemail / `name`互換を削除しない。
-  #105 / #107、#108、#106のcode順を崩さず、#121で4 PRを一つのmaintenance releaseとして
-  同時deployしてから#109へ進む
-- B-PRODUCT-01（#49）: schema追加、既存data / 対象demo seed移行、一時互換trigger、Product型・serializer。
-  変更で影響を受ける`tests-ts/api.test.ts`、`tests-ts/purchase-concurrency.test.ts`を含む全API・並行購入
-  fixture / assertionも同じPRで更新する。このB-CONTRACT-01の受け渡しは、#49本文にある古い
-  「触る場所」と必須テストの列挙を上書きする
-- B-PRODUCT-02（#89）/ 03（#50）: `deleted_at IS NULL`の商品一覧・詳細。`available`と`sold`は両方公開
-- B-PRODUCT-04（#52）: 未加工`requestId`を最終形式で検証し、数量なし、`available / stock=1`の
-  dual-writeで冪等出品
-- B-PRODUCT-05（#54）: 本人の`available`かつ取引なし商品だけをsoft delete。B-PRODUCT-02 / 03、
-  B-BUY-01、B-DASHBOARD-PRODUCT-01、B-MC-CATALOG-COMPAT-01の本番反映後、B-PRODUCT-04より先に
-  有効化する
-- B-BUY-01（#53）: 共通購入serviceの`available / stock=1 -> sold / stock=0` dual-write
-- B-BUY-02: 正規・互換Web購入routeの未加工`requestId`検証、既存形式外IDのgrandfather、最小入力、
-  確定error code
-- [B-DASHBOARD-PRODUCT-01 (#92)](https://github.com/IH-Ggroup/minetenant-backend/issues/92): Productは
-  共通serializerの`status`を返し、集計も`status`へ移す
-- [B-MC-CATALOG-COMPAT-01 (#94)](https://github.com/IH-Ggroup/minetenant-backend/issues/94): 置換前の
-  `GET /minecraft/catalog`を共有公開filterへ接続し、soft delete済み商品を除外する
-- B-CONTRACT-05 / B-MC-CATALOG-01: 認証・pathは別契約。共有Productは本契約の`status`を利用
-- B-MC-BUY-01: Minecraft購入`requestId`を未加工の値で検証し、既存形式外IDには同じgrandfather規則を適用
-- [B-PRODUCT-CUTOVER (#93)](https://github.com/IH-Ggroup/minetenant-backend/issues/93): 全前提の完了後
-  だけ、互換trigger / `stock` / deprecatedな内部fieldを削除
+- 認証の移行順と旧列の削除時期は[`auth-cutover.md`](./auth-cutover.md)にまとめています。
+- 商品の公開条件、購入時の状態変更、ポイント加算は各tableの節を参照してください。
+- Minecraftの認証・連携・建築job用tableは、別の契約Issueで定義します。
+
+Issueの作業順は[B00](https://github.com/IH-Ggroup/minetenant-backend/issues/38)を参照してください。

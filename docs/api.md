@@ -33,8 +33,18 @@ camelCaseで返します。
 | 店舗level      | 境界と表示計算が実装に直書き                         | 境界、最大Lv、最大到達後、表示値、丸めを共通契約として固定              |
 | Webアカウント  | emailで認証し、`name`を表示                          | `username`で認証し、`displayName`を表示。emailは最終schemaに持たない    |
 
-DB列、制約、index、`stock=0 / 1 / 2以上`の移行規則は
-[`docs/database.md`](./database.md)を正本とします。
+DBの列・制約・移行規則は[`database.md`](./database.md)を参照してください。
+
+## 目次
+
+- [共通仕様](#共通仕様)
+- [店舗ポイント](#店舗ポイント)
+- [Web API](#webエンドポイント一覧)
+- [認証とCSRF](#認証とcsrf)
+- [一点物商品・出品・購入](#一点物product)
+- [店舗・取引](#店舗)
+- [Webフロント接続例](#webフロントの接続例)
+- [Fabric API](#fabric商品一覧)
 
 ## 共通仕様
 
