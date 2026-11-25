@@ -135,27 +135,22 @@ describe('public tunnel boundary, proxy trust, and browser security headers', ()
     }
   });
 
-  it('requires both the Worker origin and Fabric server credentials publicly', async () => {
+  it('keeps Minecraft routes outside the public Worker allowlist', async () => {
     const app = publicApp();
     const originHeaders = { 'X-MineTenant-Origin-Token': originToken };
-    const missing = await app.request('/api/v1/minecraft/catalog', {
-      headers: originHeaders,
-    });
-    await expectStatus(missing, 401);
-    expect(await missing.json()).toEqual({
-      message: 'Fabric server authentication failed.',
-      code: 'FABRIC_AUTHENTICATION_FAILED',
-    });
-
-    await expectStatus(
-      await app.request('/api/v1/minecraft/catalog', {
-        headers: {
-          ...originHeaders,
-          Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
-        },
-      }),
-      200,
-    );
+    for (const headers of [
+      originHeaders,
+      {
+        ...originHeaders,
+        Authorization: `Bearer ${TEST_FABRIC_SERVER_TOKEN}`,
+      },
+    ]) {
+      const response = await app.request('/api/v1/minecraft/catalog', {
+        headers,
+      });
+      await expectStatus(response, 404);
+      expect(await response.json()).toEqual({ message: 'Not found.' });
+    }
   });
 
   it('preserves local endpoints without origin credentials', async () => {

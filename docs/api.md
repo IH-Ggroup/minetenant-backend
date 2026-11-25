@@ -17,7 +17,8 @@ camelCaseで返します。
 > ただし共有serializerが返すProductの形、店舗の成長表示、出品・購入に伴う
 > 店舗pointsの加算規則は、どの対象endpointでも本契約へ統一します。
 > Fabric専用APIの認証はB-CONTRACT-03で確定し、B-MC-AUTH-01 #62で実装する契約です。
-> ローカル・公開モードともに、Minecraft routeにはFabric Dedicated Server認証が必要です。
+> ローカルでHonoへ直接接続するMinecraft routeにはFabric Dedicated Server認証が必要です。
+> 現在の公開モードとFront WorkerではMinecraft routeを公開しません。
 
 ## 現行から確定契約への変更
 
@@ -1452,14 +1453,15 @@ Client JARやWebブラウザからMinecraft専用APIを直接呼びません。
 
 ### 公開境界
 
-公開モードではCloudflare Workerだけが`MINETENANT_ORIGIN_TOKEN`を持ち、Honoへ
-`X-MineTenant-Origin-Token`を付けてAPIを転送します。Minecraft routeはOrigin認証の後に
-Fabric認証も通過したrequestだけを受け付け、正しいOriginトークンだけでは401です。
-公開モードを無効にしたローカル開発環境でもFabric認証は省略しません。
+現在のCloudflare WorkerはMinecraft routeを転送対象に含めず、受信した`Authorization`も
+Backendへ転送しません。Backendの公開モードでもMinecraft routeをallowlistに含めないため、
+正しいOriginトークンとFabric tokenが揃っていても404です。#62ではこの公開境界を変更しません。
+公開モードを無効にしてHonoへ直接接続するローカル開発環境でも、Fabric認証は省略しません。
 
 `X-MineTenant-Origin-Token`はWorkerからHonoまでの公開経路を守る資格情報であり、
 Fabric Serverの識別には使いません。Fabric認証と同じ値を設定せず、Fabric ServerやClient JARへ
-Originトークンを配布しません。
+Originトークンを配布しません。Minecraft routeを将来公開する場合は、Frontend側の明示的なroute追加、
+`Authorization`の安全な転送、エッジ側の試行制限、三リポジトリを通す統合テストを同時に実装します。
 
 ### Fabric認証境界
 
@@ -1474,14 +1476,23 @@ Authorization: Bearer <MINETENANT_FABRIC_SERVER_TOKEN>
 ```mermaid
 flowchart LR
   Client[Fabric Client JAR] -->|tokenなし| Server[Fabric Dedicated Server]
-  Server -->|Authorization: Bearer token| Worker[Cloudflare Worker]
-  Worker -->|Authorizationを保持 + Origin headerを追加| Api["Hono /api/v1/minecraft/**"]
+  Server -->|Authorization: Bearer token / ローカル直結| MinecraftApi["Hono /api/v1/minecraft/**"]
+  Server -. 現在の公開経路 .-> Worker[Cloudflare Worker]
+  Worker -. 404 / 転送対象外 .-> Blocked[Minecraft API]
   Browser[Webブラウザ] -->|Cookie + CSRF| Worker
+  Worker -->|Origin header| WebApi[Hono Web API]
 ```
 
-公開経路では二つの境界を順番に通します。Workerは`Authorization`を変更せず、Hono向けの
-`X-MineTenant-Origin-Token`を追加します。Fabric ServerがOriginトークンを保持する必要はありません。
-公開モードを使わないローカル環境ではOrigin認証だけを省略し、Fabric認証は維持します。
+Fabric ServerがOriginトークンを保持する必要はありません。公開モードを使わないローカル環境では
+Origin認証だけを省略し、Fabric認証は維持します。
+
+### リポジトリ間の接続条件
+
+- FrontとWebブラウザにはFabric tokenを持たせない。現在のWorkerはMinecraft routeを404にする。
+- Modは共有Hono clientからすべてのMinecraft requestへ上記のBearer headerを付ける。
+- Backend #62だけを取り込んだ状態では、header未対応のModからのrequestは401になる。
+- Mod側のheader対応後にローカル直結を確認し、公開経路が必要になった時点でWorkerとBackendを
+  同じタスク範囲で公開する。
 
 Fabric認証middlewareはroute groupの先頭で、body parse、利用者や商品などの検索、業務DBのquery・更新より
 前に実行します。認証に失敗したrequestでは業務DBを読み書きせず、session Cookieも発行しません。

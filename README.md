@@ -45,7 +45,9 @@ MySQL管理ユーザー（初期値は`root`）のパスワード入力が表示
 初回に作る`.env`には、このclone専用のランダムなDBユーザー名・パスワードと、
 Fabric Dedicated Server認証用tokenを生成します。
 そのため、PCに同名ユーザーが残っていても上書きせず、別cloneの接続も壊しません。
-DB・テーブル・既存データは上書きせず、既存の`.env`がある場合は内容を一切変更しません。
+DB・テーブル・既存データは上書きしません。既存のローカル`.env`では、
+`MINETENANT_FABRIC_SERVER_TOKEN`が未記載または空の場合だけ、64文字のtokenを一度補完します。
+設定済みのtokenやDB接続値など、その他の値は変更しません。
 登録済みmigrationで解消できない設定不一致やスキーマ不一致は、
 勝手に修復せず診断を表示して停止します。
 
@@ -55,9 +57,9 @@ CIなど対話入力できない環境だけ`MYSQL_ADMIN_PASSWORD`も設定で�
 MySQL本体のインストールやOSサービスの起動は自動化しません。MySQLが停止している場合は、
 安全のためDB操作をせず、起動を案内して終了します。
 
-既存の`.env`に`MINETENANT_FABRIC_SERVER_TOKEN`がない場合は、次で64文字のtokenを生成して
-`.env`とFabric Dedicated Serverのserver専用設定へ同じ値を登録してください。Client JARやWebへは
-登録しません。
+`npm run dev`によるtokenの自動補完は`APP_ENV=local`だけです。productionなどで手動設定する場合は、
+次で64文字のtokenを生成し、BackendのsecretとFabric Dedicated Serverのserver専用設定へ
+同じ値を登録してください。Client JARやWebへは登録しません。
 
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
@@ -65,8 +67,9 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 
 ### 既にDBを準備済みの場合
 
-既存環境や更新取り込み後も`npm run dev`だけです。既存の`.env`を上書きせず、
-接続・スキーマを診断し、未適用のmigrationをversion順に実行してから起動します。
+既存環境や更新取り込み後も`npm run dev`だけです。既存のDB接続値などは上書きせず、
+ローカル用Fabric tokenだけを必要に応じて補完します。その後、接続・スキーマを診断し、
+未適用のmigrationをversion順に実行してから起動します。
 空のDBにだけデモデータを入れます。
 
 認証APIはusername方式だけを受け付けます。registerは`username`・任意の`displayName`・
@@ -233,6 +236,8 @@ Workerは同じ秘密値を`X-MineTenant-Origin-Token`で送信します。
 Honoは秘密値確認後のループバック経由でのみこの値を信用します。
 Cookie転送を利用できます。Honoの起動には`npm start`または`npm run dev`を使ってください。
 
-Minecraft専用APIはローカル・公開モードともにFabric Dedicated Server認証が必要です。
+Minecraft専用APIはローカルでHonoへ直接接続する場合もFabric Dedicated Server認証が必要です。
+現在の公開モードとFront WorkerではMinecraft専用APIを許可せず、404を返します。
+公開する場合は、Workerの転送契約・エッジ側の試行制限・統合テストを別タスクで揃えます。
 認証契約とtoken更新手順は[`docs/api.md`](./docs/api.md#fabric-dedicated-server認証)を参照してください。
 決済・配送・画像アップロードは含みません。
